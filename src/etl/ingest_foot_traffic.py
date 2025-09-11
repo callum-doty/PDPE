@@ -1,6 +1,7 @@
 # etl/ingest_foot_traffic.py
 import os
 import random
+import requests
 import numpy as np
 from datetime import datetime, timedelta
 from etl.utils import safe_request, get_db_conn, logging
@@ -123,30 +124,149 @@ def generate_realistic_foot_traffic(venue_external_id, venue_type=None, hours_ba
 
 def fetch_foot_traffic(venue_external_id, venue_type=None):
     """
-    Fetch foot traffic data for a venue
+    Fetch foot traffic data for a venue using BestTime API
 
     Args:
-        venue_external_id (str): External venue identifier
-        venue_type (str): Type of venue for realistic data generation
+        venue_external_id (str): External venue identifier (Google Place ID)
+        venue_type (str): Type of venue for fallback data generation
 
     Returns:
         dict: Foot traffic data
     """
-    # TODO: Replace with real foot traffic API when available
-    # For now, generate realistic mock data
-
     if not FOOT_KEY:
-        logging.warning("FOOT_TRAFFIC_API_KEY not set, using mock data generator")
-        return generate_realistic_foot_traffic(venue_external_id, venue_type)
+        logging.error(
+            "FOOT_TRAFFIC_API_KEY not set - cannot fetch real foot traffic data"
+        )
+        raise ValueError("FOOT_TRAFFIC_API_KEY is required for foot traffic data")
 
-    # If we had a real API, it would look like this:
-    # url = f"https://api.realfoottrafficprovider.com/v1/visits/{venue_external_id}"
-    # headers = {"Authorization": f"Bearer {FOOT_KEY}"}
-    # return safe_request(url, headers=headers)
+    try:
+        # BestTime API endpoint for venue analysis
+        url = "https://besttime.app/api/v1/forecasts"
+        headers = {
+            "Authorization": f"ApiKey {FOOT_KEY}",
+            "Content-Type": "application/json",
+        }
 
-    # For now, return mock data even with API key
-    logging.info(f"Generating mock foot traffic data for venue {venue_external_id}")
-    return generate_realistic_foot_traffic(venue_external_id, venue_type)
+        # BestTime API expects venue_id (Google Place ID) and venue_name
+        # Let's try a simpler payload format
+        payload = {
+            "venue_id": venue_external_id,
+        }
+
+        logging.info(f"Fetching real foot traffic data for venue {venue_external_id}")
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+
+        # If we get a 400 error, let's try the GET endpoint instead
+        if response.status_code == 400:
+            logging.info("POST request failed, trying GET endpoint...")
+            get_url = f"https://besttime.app/api/v1/forecasts/{venue_external_id}"
+            response = requests.get(get_url, headers=headers, timeout=30)
+
+        response.raise_for_status()
+        api_data = response.json()
+
+        # Convert BestTime API response to our internal format
+        return convert_besttime_to_internal_format(
+            api_data, venue_external_id, venue_type
+        )
+
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Failed to fetch foot traffic data for {venue_external_id}: {e}")
+        # Instead of raising, return None to indicate no data available
+        # This prevents fallback to synthetic data
+        return None
+    except Exception as e:
+        logging.error(
+            f"Error processing foot traffic data for {venue_external_id}: {e}"
+        )
+        return None
+
+
+def convert_besttime_to_internal_format(besttime_data, venue_external_id, venue_type):
+    """
+    Convert BestTime API response to our internal format
+
+    Args:
+        besttime_data (dict): Raw BestTime API response
+        venue_external_id (str): Venue identifier
+        venue_type (str): Type of venue
+
+    Returns:
+        dict: Data in our internal format
+    """
+    current_time = datetime.utcnow()
+    traffic_data = []
+
+    try:
+        # BestTime API returns analysis data with busy hours
+        analysis = besttime_data.get("analysis", {})
+        busy_hours = analysis.get("busy_hours", [])
+
+        if not busy_hours:
+            logging.warning(f"No busy hours data found for venue {venue_external_id}")
+            return None
+
+        # Generate hourly data for the past 24 hours based on BestTime patterns
+        for i in range(24):
+            timestamp = current_time - timedelta(hours=i)
+            hour = timestamp.hour
+
+            # Find the corresponding busy hour data
+            busy_hour_data = None
+            for bh in busy_hours:
+                if bh.get("hour") == hour:
+                    busy_hour_data = bh
+                    break
+
+            if busy_hour_data:
+                # Use real BestTime data
+                busyness_score = busy_hour_data.get("busyness_score", 0)
+                # Convert busyness score (0-100) to visitor count estimate
+                base_visitors = max(1, int(busyness_score * 0.5))  # Scale appropriately
+
+                traffic_entry = {
+                    "timestamp": timestamp.isoformat(),
+                    "visitors_count": base_visitors,
+                    "median_dwell_seconds": busy_hour_data.get(
+                        "dwell_time", 1800
+                    ),  # Default 30 min
+                    "visitors_change_24h": 0,  # BestTime doesn't provide this directly
+                    "visitors_change_7d": 0,  # BestTime doesn't provide this directly
+                    "peak_hour_ratio": busyness_score / 100.0,
+                    "confidence_score": 0.9,  # High confidence for real API data
+                }
+            else:
+                # Fill in missing hours with minimal data
+                traffic_entry = {
+                    "timestamp": timestamp.isoformat(),
+                    "visitors_count": 1,
+                    "median_dwell_seconds": 1800,
+                    "visitors_change_24h": 0,
+                    "visitors_change_7d": 0,
+                    "peak_hour_ratio": 0.1,
+                    "confidence_score": 0.5,
+                }
+
+            traffic_data.append(traffic_entry)
+
+        return {
+            "venue_id": venue_external_id,
+            "data_source": "besttime_api",
+            "generated_at": current_time.isoformat(),
+            "traffic_data": traffic_data,
+            "metadata": {
+                "venue_type": venue_type or "unknown",
+                "data_points": len(traffic_data),
+                "time_range_hours": 24,
+                "api_provider": "BestTime",
+            },
+        }
+
+    except Exception as e:
+        logging.error(
+            f"Error converting BestTime data for venue {venue_external_id}: {e}"
+        )
+        return None
 
 
 def process_foot_traffic_data(raw_data):

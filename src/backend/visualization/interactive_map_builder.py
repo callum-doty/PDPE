@@ -379,6 +379,154 @@ class InteractiveMapBuilder:
             logger.error(f"Error creating combined visualization: {e}")
             return None
 
+    def create_layered_heatmap(
+        self,
+        api_layers: Dict = None,
+        assumption_layers: Dict = None,
+        output_path: str = "real_data_heatmap.html",
+        style: str = "streets",
+        layer_config: Dict = None,
+    ) -> Optional[Path]:
+        """
+        Create interactive heatmap with toggleable API and assumption layers.
+
+        Args:
+            api_layers: Dictionary of API-sourced data layers
+                - events: List of event data
+                - places: List of place data
+                - weather: Weather data
+                - foot_traffic: Foot traffic data
+            assumption_layers: Dictionary of calculated/modeled layers
+                - college_density: College layer data
+                - spending_propensity: Spending propensity data
+                - custom_features: Other feature layers
+            output_path: Output HTML file path
+            style: Map style to use
+            layer_config: Configuration for layer display options
+
+        Returns:
+            Path to generated HTML file
+        """
+        if not any([api_layers, assumption_layers]):
+            logger.warning("No data layers provided for layered heatmap")
+            return None
+
+        try:
+            # Determine center from available data
+            center = self._calculate_center_from_layered_data(
+                api_layers, assumption_layers
+            )
+
+            # Create base map
+            m = self._create_base_map(center, zoom=11, style=style)
+
+            # Create layer groups for API data
+            if api_layers:
+                api_group = folium.FeatureGroup(name="📡 API Data Layers", show=True)
+
+                # Events layer
+                if api_layers.get("events"):
+                    events_layer = folium.FeatureGroup(
+                        name="🎪 Events (PredictHQ)", show=True
+                    )
+                    self._add_events_layer(
+                        events_layer, api_layers["events"], color_scheme="api"
+                    )
+                    events_layer.add_to(api_group)
+
+                # Places layer
+                if api_layers.get("places"):
+                    places_layer = folium.FeatureGroup(name="📍 Places", show=True)
+                    self._add_places_layer(
+                        places_layer, api_layers["places"], color_scheme="api"
+                    )
+                    places_layer.add_to(api_group)
+
+                # Weather layer
+                if api_layers.get("weather"):
+                    weather_layer = folium.FeatureGroup(name="🌤️ Weather", show=False)
+                    self._add_weather_layer(
+                        weather_layer, api_layers["weather"], color_scheme="api"
+                    )
+                    weather_layer.add_to(api_group)
+
+                # Foot traffic layer
+                if api_layers.get("foot_traffic"):
+                    traffic_layer = folium.FeatureGroup(
+                        name="🚶 Foot Traffic", show=False
+                    )
+                    self._add_traffic_layer(
+                        traffic_layer, api_layers["foot_traffic"], color_scheme="api"
+                    )
+                    traffic_layer.add_to(api_group)
+
+                api_group.add_to(m)
+
+            # Create layer groups for assumption/calculated data
+            if assumption_layers:
+                assumption_group = folium.FeatureGroup(
+                    name="🧠 Assumption Layers", show=True
+                )
+
+                # College density layer
+                if assumption_layers.get("college_density"):
+                    college_layer = folium.FeatureGroup(
+                        name="🎓 College Density", show=True
+                    )
+                    self._add_college_layer(
+                        college_layer,
+                        assumption_layers["college_density"],
+                        color_scheme="assumption",
+                    )
+                    college_layer.add_to(assumption_group)
+
+                # Spending propensity layer
+                if assumption_layers.get("spending_propensity"):
+                    spending_layer = folium.FeatureGroup(
+                        name="💰 Spending Propensity", show=True
+                    )
+                    self._add_spending_layer(
+                        spending_layer,
+                        assumption_layers["spending_propensity"],
+                        color_scheme="assumption",
+                    )
+                    spending_layer.add_to(assumption_group)
+
+                # Custom features layer
+                if assumption_layers.get("custom_features"):
+                    features_layer = folium.FeatureGroup(
+                        name="⚙️ Custom Features", show=False
+                    )
+                    self._add_custom_features_layer(
+                        features_layer,
+                        assumption_layers["custom_features"],
+                        color_scheme="assumption",
+                    )
+                    features_layer.add_to(assumption_group)
+
+                assumption_group.add_to(m)
+
+            # Add enhanced layer control with custom styling
+            self._add_enhanced_layer_control(m)
+
+            # Add comprehensive legend for layered visualization
+            self._add_layered_legend(m, api_layers, assumption_layers)
+
+            # Add layer information panel
+            self._add_layer_info_panel(m)
+
+            # Save map
+            output_file = Path(output_path).resolve()
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            m.save(str(output_file))
+
+            logger.info(f"Layered heatmap saved to {output_file}")
+            return output_file
+
+        except Exception as e:
+            logger.error(f"Error creating layered heatmap: {e}")
+            return None
+
     def _get_marker_style(self, score: float) -> Tuple[int, str, str]:
         """Get marker styling based on score."""
         if score >= 0.8:
@@ -627,3 +775,570 @@ class InteractiveMapBuilder:
         except Exception as e:
             logger.error(f"Error exporting to GeoJSON: {e}")
             return None
+
+    def _calculate_center_from_layered_data(
+        self, api_layers: Dict = None, assumption_layers: Dict = None
+    ) -> List[float]:
+        """Calculate map center from layered data."""
+        lats, lons = [], []
+
+        # Extract coordinates from API layers
+        if api_layers:
+            if api_layers.get("events"):
+                for event in api_layers["events"]:
+                    if "latitude" in event and "longitude" in event:
+                        lats.append(event["latitude"])
+                        lons.append(event["longitude"])
+
+            if api_layers.get("places"):
+                for place in api_layers["places"]:
+                    if "latitude" in place and "longitude" in place:
+                        lats.append(place["latitude"])
+                        lons.append(place["longitude"])
+
+        # Extract coordinates from assumption layers
+        if assumption_layers:
+            for layer_name, layer_data in assumption_layers.items():
+                if isinstance(layer_data, dict):
+                    for key, value in layer_data.items():
+                        if isinstance(key, tuple) and len(key) == 2:
+                            lats.append(key[0])
+                            lons.append(key[1])
+                elif isinstance(layer_data, list):
+                    for item in layer_data:
+                        if isinstance(item, dict):
+                            if "latitude" in item and "longitude" in item:
+                                lats.append(item["latitude"])
+                                lons.append(item["longitude"])
+                            elif "lat" in item and "lng" in item:
+                                lats.append(item["lat"])
+                                lons.append(item["lng"])
+
+        if lats and lons:
+            return [sum(lats) / len(lats), sum(lons) / len(lons)]
+        else:
+            return list(self.center_coords)
+
+    def _get_api_marker_style(self, score: float) -> Tuple[int, str, str]:
+        """Get marker styling for API layers (blue color scheme)."""
+        if score >= 0.8:
+            return 12, "#08519c", "#08519c"  # Dark blue
+        elif score >= 0.6:
+            return 10, "#3182bd", "#3182bd"  # Medium blue
+        elif score >= 0.4:
+            return 8, "#6baed6", "#6baed6"  # Light blue
+        elif score >= 0.2:
+            return 6, "#9ecae1", "#9ecae1"  # Very light blue
+        else:
+            return 4, "#c6dbef", "#c6dbef"  # Pale blue
+
+    def _get_assumption_marker_style(self, score: float) -> Tuple[int, str, str]:
+        """Get marker styling for assumption layers (red/orange color scheme)."""
+        if score >= 0.8:
+            return 12, "#a50f15", "#a50f15"  # Dark red
+        elif score >= 0.6:
+            return 10, "#de2d26", "#de2d26"  # Medium red
+        elif score >= 0.4:
+            return 8, "#fb6a4a", "#fb6a4a"  # Orange-red
+        elif score >= 0.2:
+            return 6, "#fc9272", "#fc9272"  # Light orange
+        else:
+            return 4, "#fcbba1", "#fcbba1"  # Pale orange
+
+    def _add_events_layer(
+        self,
+        layer: folium.FeatureGroup,
+        events_data: List[Dict],
+        color_scheme: str = "api",
+    ):
+        """Add events layer to map with appropriate styling."""
+        for event in events_data:
+            lat = event.get("latitude", 0)
+            lon = event.get("longitude", 0)
+            score = event.get("total_score", 0)
+
+            if color_scheme == "api":
+                radius, color, fill_color = self._get_api_marker_style(score)
+            else:
+                radius, color, fill_color = self._get_assumption_marker_style(score)
+
+            popup_content = self._create_event_popup(event)
+
+            folium.CircleMarker(
+                location=(lat, lon),
+                radius=radius,
+                popup=folium.Popup(popup_content, max_width=300),
+                tooltip=f"Event: {event.get('name', 'Unknown')} | Score: {score:.2f}",
+                color=color,
+                fill=True,
+                fillColor=fill_color,
+                fillOpacity=0.7,
+                weight=2,
+            ).add_to(layer)
+
+    def _add_places_layer(
+        self,
+        layer: folium.FeatureGroup,
+        places_data: List[Dict],
+        color_scheme: str = "api",
+    ):
+        """Add places layer to map with appropriate styling."""
+        for place in places_data:
+            lat = place.get("latitude", 0)
+            lon = place.get("longitude", 0)
+            score = place.get("score", 0)
+
+            if color_scheme == "api":
+                radius, color, fill_color = self._get_api_marker_style(score)
+            else:
+                radius, color, fill_color = self._get_assumption_marker_style(score)
+
+            popup_content = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 250px;">
+                <h4 style="margin: 0 0 10px 0; color: #333;">{place.get('name', 'Unknown Place')}</h4>
+                <p style="margin: 5px 0;"><strong>Type:</strong> {place.get('type', 'Unknown')}</p>
+                <p style="margin: 5px 0;"><strong>Score:</strong> {score:.2f}</p>
+                <div style="margin-top: 10px; padding: 5px; background-color: #e3f2fd; border-radius: 3px;">
+                    <small>📡 API Data Source</small>
+                </div>
+            </div>
+            """
+
+            folium.CircleMarker(
+                location=(lat, lon),
+                radius=radius,
+                popup=folium.Popup(popup_content, max_width=300),
+                tooltip=f"Place: {place.get('name', 'Unknown')} | Score: {score:.2f}",
+                color=color,
+                fill=True,
+                fillColor=fill_color,
+                fillOpacity=0.7,
+                weight=2,
+            ).add_to(layer)
+
+    def _add_weather_layer(
+        self,
+        layer: folium.FeatureGroup,
+        weather_data: List[Dict],
+        color_scheme: str = "api",
+    ):
+        """Add weather layer to map."""
+        for weather in weather_data:
+            lat = weather.get("latitude", 0)
+            lon = weather.get("longitude", 0)
+            temp = weather.get("temperature", 0)
+
+            # Normalize temperature to 0-1 score for styling
+            score = min(max((temp - 32) / 68, 0), 1)  # 32-100°F range
+
+            if color_scheme == "api":
+                radius, color, fill_color = self._get_api_marker_style(score)
+            else:
+                radius, color, fill_color = self._get_assumption_marker_style(score)
+
+            popup_content = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 250px;">
+                <h4 style="margin: 0 0 10px 0; color: #333;">Weather Data</h4>
+                <p style="margin: 5px 0;"><strong>Temperature:</strong> {temp}°F</p>
+                <p style="margin: 5px 0;"><strong>Conditions:</strong> {weather.get('conditions', 'Unknown')}</p>
+                <div style="margin-top: 10px; padding: 5px; background-color: #e3f2fd; border-radius: 3px;">
+                    <small>🌤️ Weather API Data</small>
+                </div>
+            </div>
+            """
+
+            folium.CircleMarker(
+                location=(lat, lon),
+                radius=radius,
+                popup=folium.Popup(popup_content, max_width=300),
+                tooltip=f"Weather: {temp}°F",
+                color=color,
+                fill=True,
+                fillColor=fill_color,
+                fillOpacity=0.6,
+                weight=2,
+            ).add_to(layer)
+
+    def _add_traffic_layer(
+        self,
+        layer: folium.FeatureGroup,
+        traffic_data: List[Dict],
+        color_scheme: str = "api",
+    ):
+        """Add foot traffic layer to map."""
+        for traffic in traffic_data:
+            lat = traffic.get("latitude", 0)
+            lon = traffic.get("longitude", 0)
+            volume = traffic.get("volume", 0)
+
+            # Normalize traffic volume to 0-1 score
+            max_volume = (
+                max([t.get("volume", 0) for t in traffic_data]) if traffic_data else 1
+            )
+            score = volume / max_volume if max_volume > 0 else 0
+
+            if color_scheme == "api":
+                radius, color, fill_color = self._get_api_marker_style(score)
+            else:
+                radius, color, fill_color = self._get_assumption_marker_style(score)
+
+            popup_content = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 250px;">
+                <h4 style="margin: 0 0 10px 0; color: #333;">Foot Traffic</h4>
+                <p style="margin: 5px 0;"><strong>Volume:</strong> {volume}</p>
+                <p style="margin: 5px 0;"><strong>Time:</strong> {traffic.get('timestamp', 'Unknown')}</p>
+                <div style="margin-top: 10px; padding: 5px; background-color: #e3f2fd; border-radius: 3px;">
+                    <small>🚶 Traffic API Data</small>
+                </div>
+            </div>
+            """
+
+            folium.CircleMarker(
+                location=(lat, lon),
+                radius=radius,
+                popup=folium.Popup(popup_content, max_width=300),
+                tooltip=f"Traffic Volume: {volume}",
+                color=color,
+                fill=True,
+                fillColor=fill_color,
+                fillOpacity=0.6,
+                weight=2,
+            ).add_to(layer)
+
+    def _add_college_layer(
+        self,
+        layer: folium.FeatureGroup,
+        college_data: Dict,
+        color_scheme: str = "assumption",
+    ):
+        """Add college density layer to map."""
+        for (lat, lon), score in college_data.items():
+            if color_scheme == "api":
+                radius, color, fill_color = self._get_api_marker_style(score)
+            else:
+                radius, color, fill_color = self._get_assumption_marker_style(score)
+
+            popup_content = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 250px;">
+                <h4 style="margin: 0 0 10px 0; color: #333;">College Density</h4>
+                <p style="margin: 5px 0;"><strong>Score:</strong> {score:.3f}</p>
+                <p style="margin: 5px 0;"><strong>Location:</strong> {lat:.4f}, {lon:.4f}</p>
+                <div style="margin-top: 10px; padding: 5px; background-color: #ffebee; border-radius: 3px;">
+                    <small>🎓 Calculated Layer</small>
+                </div>
+            </div>
+            """
+
+            folium.CircleMarker(
+                location=(lat, lon),
+                radius=max(3, radius),
+                popup=folium.Popup(popup_content, max_width=300),
+                tooltip=f"College Density: {score:.3f}",
+                color=color,
+                fill=True,
+                fillColor=fill_color,
+                fillOpacity=0.6,
+                weight=1,
+            ).add_to(layer)
+
+    def _add_spending_layer(
+        self,
+        layer: folium.FeatureGroup,
+        spending_data: Dict,
+        color_scheme: str = "assumption",
+    ):
+        """Add spending propensity layer to map."""
+        for (lat, lon), score in spending_data.items():
+            if color_scheme == "api":
+                radius, color, fill_color = self._get_api_marker_style(score)
+            else:
+                radius, color, fill_color = self._get_assumption_marker_style(score)
+
+            popup_content = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 250px;">
+                <h4 style="margin: 0 0 10px 0; color: #333;">Spending Propensity</h4>
+                <p style="margin: 5px 0;"><strong>Score:</strong> {score:.3f}</p>
+                <p style="margin: 5px 0;"><strong>Location:</strong> {lat:.4f}, {lon:.4f}</p>
+                <div style="margin-top: 10px; padding: 5px; background-color: #ffebee; border-radius: 3px;">
+                    <small>💰 Calculated Layer</small>
+                </div>
+            </div>
+            """
+
+            folium.CircleMarker(
+                location=(lat, lon),
+                radius=max(3, radius),
+                popup=folium.Popup(popup_content, max_width=300),
+                tooltip=f"Spending Score: {score:.3f}",
+                color=color,
+                fill=True,
+                fillColor=fill_color,
+                fillOpacity=0.6,
+                weight=1,
+            ).add_to(layer)
+
+    def _add_custom_features_layer(
+        self,
+        layer: folium.FeatureGroup,
+        features_data: Dict,
+        color_scheme: str = "assumption",
+    ):
+        """Add custom features layer to map."""
+        for (lat, lon), score in features_data.items():
+            if color_scheme == "api":
+                radius, color, fill_color = self._get_api_marker_style(score)
+            else:
+                radius, color, fill_color = self._get_assumption_marker_style(score)
+
+            popup_content = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 250px;">
+                <h4 style="margin: 0 0 10px 0; color: #333;">Custom Features</h4>
+                <p style="margin: 5px 0;"><strong>Score:</strong> {score:.3f}</p>
+                <p style="margin: 5px 0;"><strong>Location:</strong> {lat:.4f}, {lon:.4f}</p>
+                <div style="margin-top: 10px; padding: 5px; background-color: #ffebee; border-radius: 3px;">
+                    <small>⚙️ Custom Calculation</small>
+                </div>
+            </div>
+            """
+
+            folium.CircleMarker(
+                location=(lat, lon),
+                radius=max(3, radius),
+                popup=folium.Popup(popup_content, max_width=300),
+                tooltip=f"Feature Score: {score:.3f}",
+                color=color,
+                fill=True,
+                fillColor=fill_color,
+                fillOpacity=0.6,
+                weight=1,
+            ).add_to(layer)
+
+    def _add_enhanced_layer_control(self, map_obj: folium.Map):
+        """Add enhanced layer control with custom styling."""
+        # Add standard layer control
+        folium.LayerControl(
+            position="topright",
+            collapsed=False,
+            autoZIndex=True,
+        ).add_to(map_obj)
+
+        # Add custom CSS for better layer control styling
+        custom_css = """
+        <style>
+        .leaflet-control-layers {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            font-family: Arial, sans-serif;
+        }
+        .leaflet-control-layers-expanded {
+            padding: 10px;
+            min-width: 200px;
+        }
+        .leaflet-control-layers-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .leaflet-control-layers label {
+            font-size: 13px;
+            margin: 3px 0;
+            display: flex;
+            align-items: center;
+        }
+        .leaflet-control-layers input[type="checkbox"] {
+            margin-right: 8px;
+            transform: scale(1.2);
+        }
+        </style>
+        """
+        map_obj.get_root().html.add_child(folium.Element(custom_css))
+
+    def _add_layered_legend(
+        self,
+        map_obj: folium.Map,
+        api_layers: Dict = None,
+        assumption_layers: Dict = None,
+    ):
+        """Add comprehensive legend for layered visualization."""
+        legend_items = []
+
+        # API Layers section
+        if api_layers:
+            legend_items.append('<div style="margin-bottom: 15px;">')
+            legend_items.append(
+                '<h4 style="margin: 0 0 8px 0; color: #1976d2; border-bottom: 2px solid #1976d2; padding-bottom: 3px;">📡 API Data Layers</h4>'
+            )
+
+            if api_layers.get("events"):
+                legend_items.append(
+                    '<div style="margin: 5px 0; display: flex; align-items: center;">'
+                )
+                legend_items.append(
+                    '<div style="width: 12px; height: 12px; background: #08519c; border-radius: 50%; margin-right: 8px;"></div>'
+                )
+                legend_items.append(
+                    '<span style="font-size: 12px;">Events (PredictHQ)</span>'
+                )
+                legend_items.append("</div>")
+
+            if api_layers.get("places"):
+                legend_items.append(
+                    '<div style="margin: 5px 0; display: flex; align-items: center;">'
+                )
+                legend_items.append(
+                    '<div style="width: 12px; height: 12px; background: #3182bd; border-radius: 50%; margin-right: 8px;"></div>'
+                )
+                legend_items.append('<span style="font-size: 12px;">Places</span>')
+                legend_items.append("</div>")
+
+            if api_layers.get("weather"):
+                legend_items.append(
+                    '<div style="margin: 5px 0; display: flex; align-items: center;">'
+                )
+                legend_items.append(
+                    '<div style="width: 12px; height: 12px; background: #6baed6; border-radius: 50%; margin-right: 8px;"></div>'
+                )
+                legend_items.append(
+                    '<span style="font-size: 12px;">Weather Data</span>'
+                )
+                legend_items.append("</div>")
+
+            if api_layers.get("foot_traffic"):
+                legend_items.append(
+                    '<div style="margin: 5px 0; display: flex; align-items: center;">'
+                )
+                legend_items.append(
+                    '<div style="width: 12px; height: 12px; background: #9ecae1; border-radius: 50%; margin-right: 8px;"></div>'
+                )
+                legend_items.append(
+                    '<span style="font-size: 12px;">Foot Traffic</span>'
+                )
+                legend_items.append("</div>")
+
+            legend_items.append("</div>")
+
+        # Assumption Layers section
+        if assumption_layers:
+            legend_items.append('<div style="margin-bottom: 15px;">')
+            legend_items.append(
+                '<h4 style="margin: 0 0 8px 0; color: #d32f2f; border-bottom: 2px solid #d32f2f; padding-bottom: 3px;">🧠 Assumption Layers</h4>'
+            )
+
+            if assumption_layers.get("college_density"):
+                legend_items.append(
+                    '<div style="margin: 5px 0; display: flex; align-items: center;">'
+                )
+                legend_items.append(
+                    '<div style="width: 12px; height: 12px; background: #a50f15; border-radius: 50%; margin-right: 8px;"></div>'
+                )
+                legend_items.append(
+                    '<span style="font-size: 12px;">College Density</span>'
+                )
+                legend_items.append("</div>")
+
+            if assumption_layers.get("spending_propensity"):
+                legend_items.append(
+                    '<div style="margin: 5px 0; display: flex; align-items: center;">'
+                )
+                legend_items.append(
+                    '<div style="width: 12px; height: 12px; background: #de2d26; border-radius: 50%; margin-right: 8px;"></div>'
+                )
+                legend_items.append(
+                    '<span style="font-size: 12px;">Spending Propensity</span>'
+                )
+                legend_items.append("</div>")
+
+            if assumption_layers.get("custom_features"):
+                legend_items.append(
+                    '<div style="margin: 5px 0; display: flex; align-items: center;">'
+                )
+                legend_items.append(
+                    '<div style="width: 12px; height: 12px; background: #fb6a4a; border-radius: 50%; margin-right: 8px;"></div>'
+                )
+                legend_items.append(
+                    '<span style="font-size: 12px;">Custom Features</span>'
+                )
+                legend_items.append("</div>")
+
+            legend_items.append("</div>")
+
+        # Score intensity guide
+        legend_items.append(
+            '<div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #ddd;">'
+        )
+        legend_items.append(
+            '<h5 style="margin: 0 0 8px 0; font-size: 12px; color: #666;">Score Intensity</h5>'
+        )
+        legend_items.append(
+            '<div style="display: flex; align-items: center; margin: 3px 0;">'
+        )
+        legend_items.append(
+            '<div style="width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;"></div>'
+        )
+        legend_items.append(
+            '<span style="font-size: 11px;">Larger = Higher Score</span>'
+        )
+        legend_items.append("</div>")
+        legend_items.append("</div>")
+
+        legend_html = f"""
+        <div style="position: fixed; 
+                    bottom: 20px; left: 20px; width: 280px; height: auto; max-height: 500px;
+                    background-color: rgba(255, 255, 255, 0.95); 
+                    border: 2px solid #333; border-radius: 8px;
+                    z-index: 9999; font-size: 12px; padding: 15px;
+                    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+                    overflow-y: auto;">
+        <h3 style="margin: 0 0 15px 0; color: #333; text-align: center; border-bottom: 2px solid #333; padding-bottom: 8px;">
+            Data Layer Legend
+        </h3>
+        {"".join(legend_items)}
+        </div>
+        """
+        map_obj.get_root().html.add_child(folium.Element(legend_html))
+
+    def _add_layer_info_panel(self, map_obj: folium.Map):
+        """Add information panel explaining layer types."""
+        info_html = """
+        <div style="position: fixed; 
+                    top: 20px; right: 20px; width: 300px; height: auto;
+                    background-color: rgba(255, 255, 255, 0.95); 
+                    border: 2px solid #333; border-radius: 8px;
+                    z-index: 9999; font-size: 12px; padding: 15px;
+                    box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+        <h3 style="margin: 0 0 15px 0; color: #333; text-align: center; border-bottom: 2px solid #333; padding-bottom: 8px;">
+            Interactive Heatmap Guide
+        </h3>
+        
+        <div style="margin-bottom: 12px;">
+            <h4 style="margin: 0 0 6px 0; color: #1976d2; font-size: 13px;">📡 API Data Layers</h4>
+            <p style="margin: 0; font-size: 11px; color: #666; line-height: 1.4;">
+                Real-time data from external APIs including events, places, weather, and foot traffic.
+                <strong>Blue color scheme</strong> indicates API-sourced data.
+            </p>
+        </div>
+        
+        <div style="margin-bottom: 12px;">
+            <h4 style="margin: 0 0 6px 0; color: #d32f2f; font-size: 13px;">🧠 Assumption Layers</h4>
+            <p style="margin: 0; font-size: 11px; color: #666; line-height: 1.4;">
+                Calculated layers based on models and assumptions including college density and spending propensity.
+                <strong>Red/orange color scheme</strong> indicates calculated data.
+            </p>
+        </div>
+        
+        <div style="margin-bottom: 12px;">
+            <h4 style="margin: 0 0 6px 0; color: #333; font-size: 13px;">🎛️ Controls</h4>
+            <p style="margin: 0; font-size: 11px; color: #666; line-height: 1.4;">
+                Use the layer control panel (top-right) to toggle individual layers on/off.
+                Click markers for detailed information.
+            </p>
+        </div>
+        
+        <div style="text-align: center; margin-top: 15px; padding-top: 10px; border-top: 1px solid #ddd;">
+            <small style="color: #999; font-size: 10px;">
+                PDPE Interactive Heatmap v2.0
+            </small>
+        </div>
+        </div>
+        """
+        map_obj.get_root().html.add_child(folium.Element(info_html))

@@ -1,8 +1,32 @@
 # etl/ingest_places.py
 import os
 from etl.utils import safe_request, get_db_conn, logging
+from psycopg2.extras import execute_values
 
 API_KEY = os.getenv("GOOGLE_PLACES_API_KEY")
+
+
+def fetch_google_places(query, location=None):
+    """
+    Fetch places using Google Places Text Search API
+
+    Args:
+        query (str): Search query (e.g., "restaurants in Kansas City, MO")
+        location (str): Optional location bias (e.g., "39.0997,-94.5786")
+
+    Returns:
+        dict: Google Places API response
+    """
+    url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+    params = {
+        "key": API_KEY,
+        "query": query,
+    }
+    if location:
+        params["location"] = location
+        params["radius"] = 50000  # 50km radius
+
+    return safe_request(url, params=params)
 
 
 def fetch_nearby_places(lat, lng, radius=5000, pagetoken=None):

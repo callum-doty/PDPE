@@ -515,6 +515,10 @@ class InteractiveMapBuilder:
             # Add layer information panel
             self._add_layer_info_panel(m)
 
+            # Add venue ranking sidebar if places data is available
+            if api_layers and api_layers.get("places"):
+                self._add_venue_ranking_sidebar(m, api_layers["places"])
+
             # Save map
             output_file = Path(output_path).resolve()
             output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -882,38 +886,128 @@ class InteractiveMapBuilder:
         places_data: List[Dict],
         color_scheme: str = "api",
     ):
-        """Add places layer to map with appropriate styling."""
+        """Add places layer to map as a heatmap with venue markers."""
+        if not places_data:
+            return
+
+        # Create heatmap data
+        heat_data = []
+        max_score = (
+            max([place.get("total_score", 0) for place in places_data])
+            if places_data
+            else 1.0
+        )
+
         for place in places_data:
             lat = place.get("latitude", 0)
             lon = place.get("longitude", 0)
-            score = place.get("score", 0)
+            score = place.get("total_score", 0)
 
-            if color_scheme == "api":
-                radius, color, fill_color = self._get_api_marker_style(score)
-            else:
-                radius, color, fill_color = self._get_assumption_marker_style(score)
+            # Normalize score for heatmap intensity
+            intensity = score / max_score if max_score > 0 else 0
+            heat_data.append([lat, lon, intensity])
 
+        # Add heatmap layer
+        try:
+            from folium.plugins import HeatMap
+
+            HeatMap(
+                heat_data,
+                radius=25,
+                blur=20,
+                max_zoom=18,
+                gradient={
+                    0.0: "#313695",
+                    0.2: "#4575b4",
+                    0.4: "#74add1",
+                    0.6: "#abd9e9",
+                    0.8: "#fee090",
+                    1.0: "#d73027",
+                },
+                name="Venue Heatmap",
+            ).add_to(layer)
+
+        except ImportError:
+            logger.warning(
+                "HeatMap plugin not available, using circle markers as fallback"
+            )
+            # Fallback to circle markers if HeatMap is not available
+            for place in places_data:
+                lat = place.get("latitude", 0)
+                lon = place.get("longitude", 0)
+                score = place.get("total_score", 0)
+
+                if color_scheme == "api":
+                    radius, color, fill_color = self._get_api_marker_style(score)
+                else:
+                    radius, color, fill_color = self._get_assumption_marker_style(score)
+
+                popup_content = f"""
+                <div style="font-family: Arial, sans-serif; max-width: 250px;">
+                    <h4 style="margin: 0 0 10px 0; color: #333;">{place.get('name', 'Unknown Place')}</h4>
+                    <p style="margin: 5px 0;"><strong>Type:</strong> {place.get('category', 'Unknown')}</p>
+                    <p style="margin: 5px 0;"><strong>Score:</strong> {score:.2f}</p>
+                    <div style="margin-top: 10px; padding: 5px; background-color: #e3f2fd; border-radius: 3px;">
+                        <small>📡 API Data Source</small>
+                    </div>
+                </div>
+                """
+
+                folium.CircleMarker(
+                    location=(lat, lon),
+                    radius=radius,
+                    popup=folium.Popup(popup_content, max_width=300),
+                    tooltip=f"Place: {place.get('name', 'Unknown')} | Score: {score:.2f}",
+                    color=color,
+                    fill=True,
+                    fillColor=fill_color,
+                    fillOpacity=0.7,
+                    weight=2,
+                ).add_to(layer)
+
+        # Add top venue markers for reference
+        self._add_top_venue_markers(layer, places_data)
+
+    def _add_top_venue_markers(
+        self, layer: folium.FeatureGroup, places_data: List[Dict]
+    ):
+        """Add markers for top-scoring venues as reference points on the heatmap."""
+        if not places_data:
+            return
+
+        # Sort venues by score and get top 10
+        sorted_venues = sorted(
+            places_data, key=lambda x: x.get("total_score", 0), reverse=True
+        )
+        top_venues = sorted_venues[:10]
+
+        for i, venue in enumerate(top_venues):
+            lat = venue.get("latitude", 0)
+            lon = venue.get("longitude", 0)
+            score = venue.get("total_score", 0)
+            name = venue.get("name", "Unknown Venue")
+
+            # Create detailed popup for top venues
             popup_content = f"""
-            <div style="font-family: Arial, sans-serif; max-width: 250px;">
-                <h4 style="margin: 0 0 10px 0; color: #333;">{place.get('name', 'Unknown Place')}</h4>
-                <p style="margin: 5px 0;"><strong>Type:</strong> {place.get('type', 'Unknown')}</p>
-                <p style="margin: 5px 0;"><strong>Score:</strong> {score:.2f}</p>
-                <div style="margin-top: 10px; padding: 5px; background-color: #e3f2fd; border-radius: 3px;">
-                    <small>📡 API Data Source</small>
+            <div style="font-family: Arial, sans-serif; max-width: 300px;">
+                <h4 style="margin: 0 0 10px 0; color: #d73027;">🏆 Top Venue #{i+1}</h4>
+                <h5 style="margin: 0 0 8px 0; color: #333;">{name}</h5>
+                <p style="margin: 5px 0;"><strong>Category:</strong> {venue.get('category', 'Unknown')}</p>
+                <p style="margin: 5px 0;"><strong>Score:</strong> {score:.3f}</p>
+                <p style="margin: 5px 0;"><strong>Rating:</strong> {venue.get('avg_rating', 'N/A')}</p>
+                <p style="margin: 5px 0;"><strong>Address:</strong> {venue.get('address', 'N/A')}</p>
+                <div style="margin-top: 10px; padding: 5px; background-color: #fff3cd; border-radius: 3px;">
+                    <small>⭐ High-Scoring Venue</small>
                 </div>
             </div>
             """
 
-            folium.CircleMarker(
+            # Use star icon for top venues
+            folium.Marker(
                 location=(lat, lon),
-                radius=radius,
-                popup=folium.Popup(popup_content, max_width=300),
-                tooltip=f"Place: {place.get('name', 'Unknown')} | Score: {score:.2f}",
-                color=color,
-                fill=True,
-                fillColor=fill_color,
-                fillOpacity=0.7,
-                weight=2,
+                popup=folium.Popup(popup_content, max_width=350),
+                tooltip=f"🏆 #{i+1}: {name} (Score: {score:.3f})",
+                icon=folium.Icon(color="red", icon="star", prefix="fa"),
             ).add_to(layer)
 
     def _add_weather_layer(
@@ -1342,3 +1436,177 @@ class InteractiveMapBuilder:
         </div>
         """
         map_obj.get_root().html.add_child(folium.Element(info_html))
+
+    def _add_venue_ranking_sidebar(self, map_obj: folium.Map, places_data: List[Dict]):
+        """Add a sidebar with ranked list of venues."""
+        if not places_data:
+            return
+
+        # Sort venues by score
+        sorted_venues = sorted(
+            places_data, key=lambda x: x.get("total_score", 0), reverse=True
+        )
+
+        # Create venue list HTML
+        venue_items = []
+        for i, venue in enumerate(sorted_venues[:25]):  # Show top 25 venues
+            name = venue.get("name", "Unknown Venue")
+            score = venue.get("total_score", 0)
+            category = venue.get("category", "Unknown")
+            rating = venue.get("avg_rating", "N/A")
+            lat = venue.get("latitude", 0)
+            lon = venue.get("longitude", 0)
+
+            # Determine score color
+            if score >= 0.8:
+                score_color = "#d73027"
+            elif score >= 0.6:
+                score_color = "#fc8d59"
+            elif score >= 0.4:
+                score_color = "#fee08b"
+            elif score >= 0.2:
+                score_color = "#91bfdb"
+            else:
+                score_color = "#c6dbef"
+
+            venue_items.append(
+                f"""
+            <div class="venue-item" onclick="centerMapOnVenue({lat}, {lon})" 
+                 style="padding: 8px; margin: 4px 0; border-left: 4px solid {score_color}; 
+                        background: rgba(255,255,255,0.9); cursor: pointer; border-radius: 4px;
+                        transition: background-color 0.2s;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div style="flex: 1;">
+                        <div style="font-weight: bold; font-size: 13px; color: #333; margin-bottom: 2px;">
+                            #{i+1}. {name[:30]}{"..." if len(name) > 30 else ""}
+                        </div>
+                        <div style="font-size: 11px; color: #666; margin-bottom: 2px;">
+                            {category} • Rating: {rating}
+                        </div>
+                        <div style="font-size: 10px; color: #999;">
+                            Score: {score:.3f}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            """
+            )
+
+        sidebar_html = f"""
+        <div id="venue-sidebar" style="position: fixed; 
+                    top: 20px; left: 20px; width: 320px; height: 70vh;
+                    background-color: rgba(255, 255, 255, 0.95); 
+                    border: 2px solid #333; border-radius: 8px;
+                    z-index: 9998; font-size: 12px; padding: 0;
+                    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+                    display: flex; flex-direction: column;">
+            
+            <!-- Header -->
+            <div style="padding: 15px; border-bottom: 2px solid #333; background: #f8f9fa; border-radius: 6px 6px 0 0;">
+                <h3 style="margin: 0; color: #333; text-align: center; font-size: 14px;">
+                    🏆 Top Venues Ranking
+                </h3>
+                <div style="text-align: center; margin-top: 5px;">
+                    <small style="color: #666; font-size: 11px;">
+                        Click venue to center map • Total: {len(places_data)} venues
+                    </small>
+                </div>
+            </div>
+            
+            <!-- Venue List -->
+            <div style="flex: 1; overflow-y: auto; padding: 10px;">
+                {"".join(venue_items)}
+            </div>
+            
+            <!-- Footer -->
+            <div style="padding: 10px; border-top: 1px solid #ddd; background: #f8f9fa; border-radius: 0 0 6px 6px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <small style="color: #666; font-size: 10px;">
+                        Psychographic Scores
+                    </small>
+                    <button onclick="toggleSidebar()" style="background: #007bff; color: white; border: none; 
+                            padding: 4px 8px; border-radius: 3px; font-size: 10px; cursor: pointer;">
+                        Hide
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <script>
+        // Function to center map on venue
+        function centerMapOnVenue(lat, lon) {{
+            // Get the map instance
+            var mapContainer = document.querySelector('.folium-map');
+            if (mapContainer && mapContainer._leaflet_map) {{
+                var map = mapContainer._leaflet_map;
+                map.setView([lat, lon], 16);
+                
+                // Add a temporary marker
+                var tempMarker = L.marker([lat, lon], {{
+                    icon: L.icon({{
+                        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+                        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                        iconSize: [25, 41],
+                        iconAnchor: [12, 41],
+                        popupAnchor: [1, -34],
+                        shadowSize: [41, 41]
+                    }})
+                }}).addTo(map);
+                
+                // Remove the temporary marker after 3 seconds
+                setTimeout(function() {{
+                    map.removeLayer(tempMarker);
+                }}, 3000);
+            }}
+        }}
+
+        // Function to toggle sidebar visibility
+        function toggleSidebar() {{
+            var sidebar = document.getElementById('venue-sidebar');
+            if (sidebar.style.display === 'none') {{
+                sidebar.style.display = 'flex';
+            }} else {{
+                sidebar.style.display = 'none';
+            }}
+        }}
+
+        // Add hover effects
+        document.addEventListener('DOMContentLoaded', function() {{
+            var venueItems = document.querySelectorAll('.venue-item');
+            venueItems.forEach(function(item) {{
+                item.addEventListener('mouseenter', function() {{
+                    this.style.backgroundColor = 'rgba(0, 123, 255, 0.1)';
+                }});
+                item.addEventListener('mouseleave', function() {{
+                    this.style.backgroundColor = 'rgba(255,255,255,0.9)';
+                }});
+            }});
+        }});
+        </script>
+
+        <style>
+        .venue-item:hover {{
+            background-color: rgba(0, 123, 255, 0.1) !important;
+        }}
+        
+        #venue-sidebar::-webkit-scrollbar {{
+            width: 6px;
+        }}
+        
+        #venue-sidebar::-webkit-scrollbar-track {{
+            background: #f1f1f1;
+            border-radius: 3px;
+        }}
+        
+        #venue-sidebar::-webkit-scrollbar-thumb {{
+            background: #888;
+            border-radius: 3px;
+        }}
+        
+        #venue-sidebar::-webkit-scrollbar-thumb:hover {{
+            background: #555;
+        }}
+        </style>
+        """
+
+        map_obj.get_root().html.add_child(folium.Element(sidebar_html))

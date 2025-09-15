@@ -134,6 +134,12 @@ def score_venue(venue_id: str, ts: str):
 @app.post("/api/v1/predict/batch")
 def predict_batch(request: BatchPredictionRequest):
     """Generate batch predictions for heatmap visualization"""
+    if not MODEL_AVAILABLE or model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="ML model not available. Please train and load a model first.",
+        )
+
     try:
         bounds = request.grid_bounds
         resolution = request.resolution_meters
@@ -155,16 +161,12 @@ def predict_batch(request: BatchPredictionRequest):
         while lat < bounds.north:
             lng = bounds.west
             while lng < bounds.east:
-                # Generate psychographic density prediction
-                if MODEL_AVAILABLE:
-                    # Use actual model prediction logic here
-                    # For now, generate realistic sample data
-                    density = generate_realistic_prediction(lat, lng)
-                else:
-                    # Generate sample data based on location
-                    density = generate_realistic_prediction(lat, lng)
+                # Get real prediction from trained model
+                density = get_real_prediction(lat, lng)
 
-                if density > 0.1:  # Only include points with meaningful density
+                if (
+                    density is not None and density > 0.1
+                ):  # Only include meaningful predictions
                     features.append(
                         {
                             "type": "Feature",
@@ -172,7 +174,7 @@ def predict_batch(request: BatchPredictionRequest):
                             "properties": {
                                 "intensity": density,
                                 "psychographic_density": density,
-                                "confidence": 0.7 + np.random.random() * 0.3,
+                                "confidence": 0.8,  # High confidence for real model predictions
                                 "timestamp": request.timestamp,
                             },
                         }
@@ -180,6 +182,12 @@ def predict_batch(request: BatchPredictionRequest):
 
                 lng += lng_step
             lat += lat_step
+
+        if not features:
+            raise HTTPException(
+                status_code=404,
+                detail="No predictions available for the specified area. Model may need more training data.",
+            )
 
         return {
             "type": "FeatureCollection",
@@ -189,53 +197,56 @@ def predict_batch(request: BatchPredictionRequest):
                 "grid_resolution_meters": resolution,
                 "bounds": bounds.dict(),
                 "total_points": len(features),
+                "data_source": "trained_model",
             },
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
 
 
-def generate_realistic_prediction(lat: float, lng: float) -> float:
-    """Generate realistic psychographic density predictions based on location"""
-    # Kansas City downtown center
-    kc_center_lat, kc_center_lng = 39.0997, -94.5786
+def get_real_prediction(lat: float, lng: float) -> Optional[float]:
+    """
+    Get real psychographic density prediction from trained model
 
-    # Calculate distance from downtown KC
-    distance_from_center = np.sqrt(
-        (lat - kc_center_lat) ** 2 + (lng - kc_center_lng) ** 2
-    )
+    Args:
+        lat (float): Latitude
+        lng (float): Longitude
 
-    # Base intensity decreases with distance from downtown
-    base_intensity = max(0, 1 - distance_from_center * 15)
+    Returns:
+        Optional[float]: Real prediction if model available, None if not
+    """
+    if not MODEL_AVAILABLE or model is None:
+        return None
 
-    # Add some noise and clustering patterns
-    noise = np.random.random() * 0.4
-
-    # Create some hotspots (simulate popular areas)
-    hotspots = [
-        (39.1012, -94.5844),  # Power & Light District
-        (39.0739, -94.5861),  # Crossroads Arts District
-        (39.0458, -94.5833),  # Plaza area
-        (39.1167, -94.6275),  # Westport
-    ]
-
-    hotspot_bonus = 0
-    for hotspot_lat, hotspot_lng in hotspots:
-        hotspot_distance = np.sqrt((lat - hotspot_lat) ** 2 + (lng - hotspot_lng) ** 2)
-        if hotspot_distance < 0.01:  # Within ~1km
-            hotspot_bonus += max(0, 0.5 - hotspot_distance * 50)
-
-    # Combine factors
-    intensity = min(1.0, base_intensity + noise + hotspot_bonus)
-
-    return max(0, intensity)
+    try:
+        # This would need to be implemented with real feature engineering
+        # For now, return None to indicate no real prediction available
+        # TODO: Implement real feature extraction and model prediction
+        return None
+    except Exception as e:
+        logging.error(f"Error generating real prediction: {e}")
+        return None
 
 
 @app.get("/api/v1/predict")
 def predict_single(lat: float, lng: float, timestamp: str):
     """Get prediction for a single location"""
-    density = generate_realistic_prediction(lat, lng)
+    if not MODEL_AVAILABLE or model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="ML model not available. Please train and load a model first.",
+        )
+
+    density = get_real_prediction(lat, lng)
+
+    if density is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No prediction available for this location. Model may need more training data.",
+        )
 
     return {
         "psychographic_density": density,
@@ -247,12 +258,11 @@ def predict_single(lat: float, lng: float, timestamp: str):
             "demographics": 0.27,
         },
         "model_ensemble": {
-            "xgboost": density + np.random.normal(0, 0.05),
-            "neural": density + np.random.normal(0, 0.05),
-            "bayesian": density,
+            "trained_model": density,
         },
         "location": {"lat": lat, "lng": lng},
         "timestamp": timestamp,
+        "data_source": "trained_model",
     }
 
 
@@ -288,8 +298,10 @@ def create_heatmap_visualization(request: VisualizationRequest):
         while lat < bounds.north:
             lng = bounds.west
             while lng < bounds.east:
-                density = generate_realistic_prediction(lat, lng)
-                if density > 0.1:  # Only include meaningful probabilities
+                density = get_real_prediction(lat, lng)
+                if (
+                    density is not None and density > 0.1
+                ):  # Only include meaningful probabilities
                     probability_data[(lat, lng)] = density
                 lng += lng_step
             lat += lat_step
@@ -449,8 +461,10 @@ def generate_sample_events(bounds: GridBounds, count: int = 15) -> List[Dict]:
         lat = np.random.uniform(bounds.south, bounds.north)
         lng = np.random.uniform(bounds.west, bounds.east)
 
-        # Generate score based on location (higher near downtown)
-        score = generate_realistic_prediction(lat, lng)
+        # Generate score based on real prediction or default to 0.5 for sample events
+        score = get_real_prediction(lat, lng)
+        if score is None:
+            score = 0.5  # Default score for sample events when no model available
 
         # Add some randomness to the score
         score = max(0, min(1, score + np.random.normal(0, 0.1)))

@@ -6,12 +6,13 @@ from etl.utils import safe_request, get_db_conn, logging
 
 # Weather API configuration
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
-WEATHER_API_BASE_URL = "https://api.openweathermap.org/data/2.5"
+WEATHER_API_BASE_URL_V25 = "https://api.openweathermap.org/data/2.5"
+WEATHER_API_BASE_URL_V30 = "https://api.openweathermap.org/data/3.0"
 
 
 def fetch_current_weather(lat, lng):
     """
-    Fetch current weather data for a specific location using OpenWeatherMap API
+    Fetch current weather data for a specific location using OpenWeatherMap API v2.5
 
     Args:
         lat (float): Latitude
@@ -20,7 +21,7 @@ def fetch_current_weather(lat, lng):
     Returns:
         dict: Weather data response
     """
-    url = f"{WEATHER_API_BASE_URL}/weather"
+    url = f"{WEATHER_API_BASE_URL_V25}/weather"
     params = {
         "lat": lat,
         "lon": lng,
@@ -31,9 +32,42 @@ def fetch_current_weather(lat, lng):
     return safe_request(url, params=params)
 
 
+def fetch_onecall_weather(lat, lng, exclude=None, units="imperial", lang="en"):
+    """
+    Fetch current weather and forecast data using OpenWeatherMap One Call API v3.0
+
+    Args:
+        lat (float): Latitude (-90 to 90)
+        lng (float): Longitude (-180 to 180)
+        exclude (str, optional): Comma-delimited list of parts to exclude from response.
+                                Available values: current, minutely, hourly, daily, alerts
+        units (str, optional): Units of measurement. Options: standard, metric, imperial.
+                              Default: imperial (Fahrenheit, mph)
+        lang (str, optional): Language for weather descriptions. Default: en
+
+    Returns:
+        dict: One Call API response with current, hourly, and daily forecasts
+    """
+    url = f"{WEATHER_API_BASE_URL_V30}/onecall"
+    params = {
+        "lat": lat,
+        "lon": lng,
+        "appid": WEATHER_API_KEY,
+        "units": units,
+    }
+
+    # Add optional parameters if provided
+    if exclude:
+        params["exclude"] = exclude
+    if lang != "en":
+        params["lang"] = lang
+
+    return safe_request(url, params=params)
+
+
 def fetch_weather_forecast(lat, lng, days=5):
     """
-    Fetch weather forecast for a specific location
+    Fetch weather forecast for a specific location using v2.5 API
 
     Args:
         lat (float): Latitude
@@ -43,7 +77,7 @@ def fetch_weather_forecast(lat, lng, days=5):
     Returns:
         dict: Weather forecast response
     """
-    url = f"{WEATHER_API_BASE_URL}/forecast"
+    url = f"{WEATHER_API_BASE_URL_V25}/forecast"
     params = {
         "lat": lat,
         "lon": lng,
@@ -57,7 +91,7 @@ def fetch_weather_forecast(lat, lng, days=5):
 
 def fetch_historical_weather(lat, lng, dt):
     """
-    Fetch historical weather data for a specific location and time
+    Fetch historical weather data using OpenWeatherMap One Call API v3.0
     Note: Requires paid OpenWeatherMap subscription
 
     Args:
@@ -68,13 +102,58 @@ def fetch_historical_weather(lat, lng, dt):
     Returns:
         dict: Historical weather data response
     """
-    url = f"{WEATHER_API_BASE_URL}/onecall/timemachine"
+    url = f"{WEATHER_API_BASE_URL_V30}/onecall/timemachine"
     params = {
         "lat": lat,
         "lon": lng,
         "dt": dt,
         "appid": WEATHER_API_KEY,
         "units": "imperial",
+    }
+
+    return safe_request(url, params=params)
+
+
+def fetch_daily_aggregation(lat, lng, date):
+    """
+    Fetch daily aggregation weather data using OpenWeatherMap One Call API v3.0
+
+    Args:
+        lat (float): Latitude
+        lng (float): Longitude
+        date (str): Date in YYYY-MM-DD format
+
+    Returns:
+        dict: Daily aggregation weather data response
+    """
+    url = f"{WEATHER_API_BASE_URL_V30}/onecall/day_summary"
+    params = {
+        "lat": lat,
+        "lon": lng,
+        "date": date,
+        "appid": WEATHER_API_KEY,
+        "units": "imperial",
+    }
+
+    return safe_request(url, params=params)
+
+
+def fetch_weather_overview(lat, lng):
+    """
+    Fetch weather overview with human-readable summary using OpenWeatherMap One Call API v3.0
+
+    Args:
+        lat (float): Latitude
+        lng (float): Longitude
+
+    Returns:
+        dict: Weather overview with human-readable summary
+    """
+    url = f"{WEATHER_API_BASE_URL_V30}/onecall/overview"
+    params = {
+        "lat": lat,
+        "lon": lng,
+        "appid": WEATHER_API_KEY,
     }
 
     return safe_request(url, params=params)

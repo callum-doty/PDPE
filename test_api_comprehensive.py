@@ -226,7 +226,10 @@ class APITester:
 
             # Test using existing function
             response = fetch_predicthq_events(
-                place_name="Kansas City", start="2025-01-01", end="2025-02-01"
+                lat=39.0997,
+                lng=-94.5786,
+                start_date="2025-01-01",
+                end_date="2025-02-01",
             )
             response_time = (datetime.now() - start_time).total_seconds()
 

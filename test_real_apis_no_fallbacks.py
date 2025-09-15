@@ -27,10 +27,8 @@ def test_foot_traffic_api():
     print("🔍 Testing Foot Traffic API (BestTime)...")
 
     try:
-        # Use a real Google Place ID for testing
-        test_venue_id = (
-            "ChIJl5npr173wIcRolGqauYlhVU"  # Kansas City from API test results
-        )
+        # Use a sample Google Place ID for testing (this should be replaced with a real venue ID from your API results)
+        test_venue_id = "ChIJl5npr173wIcRolGqauYlhVU"  # Sample Kansas City venue ID
         result = fetch_foot_traffic(test_venue_id, "restaurant")
 
         if result is None:

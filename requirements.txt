@@ -6,6 +6,11 @@ pandas>=2.0.0
 numpy>=1.24.0
 pyarrow>=10.0.0
 
+# Web scraping dependencies
+beautifulsoup4>=4.12.0
+python-dateutil>=2.8.0
+selenium>=4.15.0
+
 # Web framework
 fastapi>=0.104.0
 uvicorn>=0.24.0

@@ -14,9 +14,9 @@ from datetime import datetime, timedelta
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 try:
-    from etl.ingest_places import fetch_google_places, upsert_places_to_db
-    from etl.ingest_events import fetch_predicthq_events, upsert_events_to_db
-    from etl.utils import get_db_conn
+    from src.etl.ingest_places import fetch_google_places, upsert_places_to_db
+    from src.etl.ingest_events import fetch_predicthq_events, upsert_events_to_db
+    from src.etl.utils import get_db_conn
 
     print("✓ Successfully imported ETL modules")
 except ImportError as e:

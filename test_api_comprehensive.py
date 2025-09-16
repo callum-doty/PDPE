@@ -20,10 +20,10 @@ load_dotenv()
 sys.path.append("src")
 
 try:
-    from etl.utils import safe_request, get_db_conn
-    from etl.ingest_places import fetch_nearby_places
-    from etl.ingest_events import fetch_predicthq_events
-    from etl.ingest_foot_traffic import fetch_foot_traffic
+    from src.etl.utils import safe_request, get_db_conn
+    from src.etl.ingest_places import fetch_nearby_places
+    from src.etl.ingest_events import fetch_predicthq_events
+    from src.etl.ingest_foot_traffic import fetch_foot_traffic
 except ImportError as e:
     print(f"Warning: Could not import ETL modules: {e}")
     safe_request = None

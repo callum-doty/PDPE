@@ -7,6 +7,11 @@ from bs4 import BeautifulSoup
 import re
 from urllib.parse import urljoin, urlparse
 from etl.utils import get_db_conn
+from etl.data_quality import process_events_with_quality_checks, log_quality_metrics
+from etl.venue_processing import (
+    process_venues_with_quality_checks,
+    log_venue_quality_metrics,
+)
 import time
 
 # Headers for web scraping to appear as a regular browser
@@ -21,25 +26,113 @@ SCRAPING_HEADERS = {
 
 # Venue scraper configurations
 VENUE_SCRAPERS = {
-    "visitkc": {
-        "name": "VisitKC",
-        "base_url": "https://www.visitkc.com",
-        "events_url": "https://www.visitkc.com/events",
+    # Major Venues
+    "tmobile_center": {
+        "name": "T-Mobile Center",
+        "base_url": "https://www.t-mobilecenter.com",
+        "events_url": "https://www.t-mobilecenter.com/events",
+        "category": "major_venue",
         "selectors": {
-            "event_container": ".event-item, .listing-item",
-            "title": ".event-title, .listing-title, h3, h2",
+            "event_container": ".event-item, .event-listing, .event",
+            "title": ".event-title, .title, h3, h2",
             "date": ".event-date, .date, .event-time",
-            "venue": ".event-venue, .venue, .location",
+            "venue": ".venue, .location",
             "description": ".event-description, .description, .excerpt",
             "link": "a",
         },
     },
-    "do816": {
-        "name": "Do816",
-        "base_url": "https://do816.com",
-        "events_url": "https://do816.com/events",
+    "uptown_theater": {
+        "name": "Uptown Theater",
+        "base_url": "https://www.uptowntheater.com",
+        "events_url": "https://www.uptowntheater.com/events",
+        "category": "major_venue",
         "selectors": {
-            "event_container": ".event-listing, .event-item",
+            "event_container": ".event-item, .event, .show",
+            "title": ".event-title, .show-title, h3, h2",
+            "date": ".event-date, .show-date, .date",
+            "venue": ".venue, .location",
+            "description": ".event-description, .description",
+            "link": "a",
+        },
+    },
+    "kauffman_center": {
+        "name": "Kauffman Center for the Performing Arts",
+        "base_url": "https://www.kauffmancenter.org",
+        "events_url": "https://www.kauffmancenter.org/events/",
+        "category": "major_venue",
+        "selectors": {
+            "event_container": ".event-item, .event, .performance",
+            "title": ".event-title, .performance-title, h3, h2",
+            "date": ".event-date, .performance-date, .date",
+            "venue": ".venue, .location",
+            "description": ".event-description, .description",
+            "link": "a",
+        },
+    },
+    "starlight_theatre": {
+        "name": "Starlight Theatre",
+        "base_url": "https://www.kcstarlight.com",
+        "events_url": "https://www.kcstarlight.com/events/",
+        "category": "major_venue",
+        "selectors": {
+            "event_container": ".event-item, .event, .show",
+            "title": ".event-title, .show-title, h3, h2",
+            "date": ".event-date, .show-date, .date",
+            "venue": ".venue, .location",
+            "description": ".event-description, .description",
+            "link": "a",
+        },
+    },
+    "midland_theatre": {
+        "name": "The Midland Theatre",
+        "base_url": "https://www.midlandkc.com",
+        "events_url": "https://www.midlandkc.com/events",
+        "category": "major_venue",
+        "selectors": {
+            "event_container": ".event-item, .event, .show",
+            "title": ".event-title, .show-title, h3, h2",
+            "date": ".event-date, .show-date, .date",
+            "venue": ".venue, .location",
+            "description": ".event-description, .description",
+            "link": "a",
+        },
+    },
+    "knuckleheads": {
+        "name": "Knuckleheads Saloon",
+        "base_url": "https://knuckleheadskc.com",
+        "events_url": "https://knuckleheadskc.com/",
+        "category": "major_venue",
+        "selectors": {
+            "event_container": ".event-item, .event, .show, .concert",
+            "title": ".event-title, .show-title, h3, h2",
+            "date": ".event-date, .show-date, .date",
+            "venue": ".venue, .location",
+            "description": ".event-description, .description",
+            "link": "a",
+        },
+    },
+    "azura_amphitheater": {
+        "name": "Azura Amphitheater",
+        "base_url": "https://www.azuraamphitheater.com",
+        "events_url": "https://www.azuraamphitheater.com/events",
+        "category": "major_venue",
+        "selectors": {
+            "event_container": ".event-item, .event, .concert",
+            "title": ".event-title, .concert-title, h3, h2",
+            "date": ".event-date, .concert-date, .date",
+            "venue": ".venue, .location",
+            "description": ".event-description, .description",
+            "link": "a",
+        },
+    },
+    # Entertainment Districts
+    "powerandlight": {
+        "name": "Power & Light District",
+        "base_url": "https://powerandlightdistrict.com",
+        "events_url": "https://powerandlightdistrict.com/Events-and-Entertainment/Events",
+        "category": "entertainment_district",
+        "selectors": {
+            "event_container": ".event, .event-listing",
             "title": ".event-title, h3, h2",
             "date": ".event-date, .date",
             "venue": ".venue, .location",
@@ -47,12 +140,13 @@ VENUE_SCRAPERS = {
             "link": "a",
         },
     },
-    "thepitchkc": {
-        "name": "The Pitch KC",
-        "base_url": "https://www.thepitchkc.com",
-        "events_url": "https://www.thepitchkc.com/events",
+    "westport": {
+        "name": "Westport KC",
+        "base_url": "https://westportkcmo.com",
+        "events_url": "https://westportkcmo.com/events/",
+        "category": "entertainment_district",
         "selectors": {
-            "event_container": ".event, .listing",
+            "event_container": ".event-item, .event",
             "title": ".event-title, h3, h2",
             "date": ".event-date, .date",
             "venue": ".venue, .location",
@@ -60,10 +154,40 @@ VENUE_SCRAPERS = {
             "link": "a",
         },
     },
+    "jazz_district": {
+        "name": "18th & Vine Jazz District",
+        "base_url": "https://kcjazzdistrict.org",
+        "events_url": "https://kcjazzdistrict.org/events/",
+        "category": "entertainment_district",
+        "selectors": {
+            "event_container": ".event-item, .event",
+            "title": ".event-title, h3, h2",
+            "date": ".event-date, .date",
+            "venue": ".venue, .location",
+            "description": ".description, .excerpt",
+            "link": "a",
+        },
+    },
+    "crossroads": {
+        "name": "Crossroads KC",
+        "base_url": "https://www.crossroadskc.com",
+        "events_url": "https://www.crossroadskc.com/shows",
+        "category": "entertainment_district",
+        "selectors": {
+            "event_container": ".show, .event",
+            "title": ".show-title, .event-title, h3, h2",
+            "date": ".show-date, .event-date, .date",
+            "venue": ".venue, .location",
+            "description": ".description, .excerpt",
+            "link": "a",
+        },
+    },
+    # Shopping & Cultural
     "plaza": {
         "name": "Country Club Plaza",
-        "base_url": "https://www.countryclubplaza.com",
-        "events_url": "https://www.countryclubplaza.com/events",
+        "base_url": "https://countryclubplaza.com",
+        "events_url": "https://countryclubplaza.com/events/",
+        "category": "shopping_cultural",
         "selectors": {
             "event_container": ".event, .event-item",
             "title": ".event-title, h3, h2",
@@ -73,12 +197,156 @@ VENUE_SCRAPERS = {
             "link": "a",
         },
     },
-    "powerandlight": {
-        "name": "Power & Light District",
-        "base_url": "https://www.powerandlightdistrict.com",
-        "events_url": "https://www.powerandlightdistrict.com/events",
+    "crown_center": {
+        "name": "Crown Center",
+        "base_url": "https://www.crowncenter.com",
+        "events_url": "https://www.crowncenter.com/events",
+        "category": "shopping_cultural",
         "selectors": {
-            "event_container": ".event, .event-listing",
+            "event_container": ".event-item, .event",
+            "title": ".event-title, h3, h2",
+            "date": ".event-date, .date",
+            "venue": ".venue, .location",
+            "description": ".description, .excerpt",
+            "link": "a",
+        },
+    },
+    "union_station": {
+        "name": "Union Station Kansas City",
+        "base_url": "https://unionstation.org",
+        "events_url": "https://unionstation.org/events/",
+        "category": "shopping_cultural",
+        "selectors": {
+            "event_container": ".event-item, .event",
+            "title": ".event-title, h3, h2",
+            "date": ".event-date, .date",
+            "venue": ".venue, .location",
+            "description": ".description, .excerpt",
+            "link": "a",
+        },
+    },
+    # Museums
+    "nelson_atkins": {
+        "name": "Nelson-Atkins Museum of Art",
+        "base_url": "https://www.nelson-atkins.org",
+        "events_url": "https://www.nelson-atkins.org/events/",
+        "category": "museum",
+        "selectors": {
+            "event_container": ".event-item, .event",
+            "title": ".event-title, h3, h2",
+            "date": ".event-date, .date",
+            "venue": ".venue, .location",
+            "description": ".description, .excerpt",
+            "link": "a",
+        },
+    },
+    "wwi_museum": {
+        "name": "National WWI Museum",
+        "base_url": "https://theworldwar.org",
+        "events_url": "https://theworldwar.org/visit/upcoming-events",
+        "category": "museum",
+        "selectors": {
+            "event_container": ".event-item, .event",
+            "title": ".event-title, h3, h2",
+            "date": ".event-date, .date",
+            "venue": ".venue, .location",
+            "description": ".description, .excerpt",
+            "link": "a",
+        },
+    },
+    "science_city": {
+        "name": "Science City",
+        "base_url": "https://sciencecity.unionstation.org",
+        "events_url": "https://sciencecity.unionstation.org/",
+        "category": "museum",
+        "selectors": {
+            "event_container": ".event-item, .event",
+            "title": ".event-title, h3, h2",
+            "date": ".event-date, .date",
+            "venue": ".venue, .location",
+            "description": ".description, .excerpt",
+            "link": "a",
+        },
+    },
+    # Theaters
+    "kc_rep": {
+        "name": "KC Repertory Theatre",
+        "base_url": "https://kcrep.org",
+        "events_url": "https://kcrep.org/season/",
+        "category": "theater",
+        "selectors": {
+            "event_container": ".show, .production, .event",
+            "title": ".show-title, .production-title, h3, h2",
+            "date": ".show-date, .production-date, .date",
+            "venue": ".venue, .location",
+            "description": ".description, .excerpt",
+            "link": "a",
+        },
+    },
+    "unicorn_theatre": {
+        "name": "Unicorn Theatre",
+        "base_url": "https://unicorntheatre.org",
+        "events_url": "https://unicorntheatre.org/",
+        "category": "theater",
+        "selectors": {
+            "event_container": ".show, .production, .event",
+            "title": ".show-title, .production-title, h3, h2",
+            "date": ".show-date, .production-date, .date",
+            "venue": ".venue, .location",
+            "description": ".description, .excerpt",
+            "link": "a",
+        },
+    },
+    # Festival & City
+    "kc_parks": {
+        "name": "Kansas City Parks & Rec",
+        "base_url": "https://kcparks.org",
+        "events_url": "https://kcparks.org/events/",
+        "category": "festival_city",
+        "selectors": {
+            "event_container": ".event-item, .event",
+            "title": ".event-title, h3, h2",
+            "date": ".event-date, .date",
+            "venue": ".venue, .location",
+            "description": ".description, .excerpt",
+            "link": "a",
+        },
+    },
+    "city_market": {
+        "name": "City Market KC",
+        "base_url": "https://citymarketkc.org",
+        "events_url": "https://citymarketkc.org/events/",
+        "category": "festival_city",
+        "selectors": {
+            "event_container": ".event-item, .event",
+            "title": ".event-title, h3, h2",
+            "date": ".event-date, .date",
+            "venue": ".venue, .location",
+            "description": ".description, .excerpt",
+            "link": "a",
+        },
+    },
+    "boulevardia": {
+        "name": "Boulevardia Festival",
+        "base_url": "https://www.boulevardia.com",
+        "events_url": "https://www.boulevardia.com/",
+        "category": "festival_city",
+        "selectors": {
+            "event_container": ".event-item, .event",
+            "title": ".event-title, h3, h2",
+            "date": ".event-date, .date",
+            "venue": ".venue, .location",
+            "description": ".description, .excerpt",
+            "link": "a",
+        },
+    },
+    "irish_fest": {
+        "name": "Irish Fest KC",
+        "base_url": "https://kcirishfest.com",
+        "events_url": "https://kcirishfest.com/",
+        "category": "festival_city",
+        "selectors": {
+            "event_container": ".event-item, .event",
             "title": ".event-title, h3, h2",
             "date": ".event-date, .date",
             "venue": ".venue, .location",
@@ -430,13 +698,14 @@ def determine_event_subcategory(title, description):
     return "general"
 
 
-def find_or_create_venue(venue_name, provider):
+def find_or_create_venue(venue_name, provider, category="local_venue"):
     """
     Find existing venue or create a new one
 
     Args:
         venue_name (str): Name of the venue
         provider (str): Provider/source of the venue data
+        category (str): Venue category
 
     Returns:
         str: Venue UUID
@@ -470,14 +739,16 @@ def find_or_create_venue(venue_name, provider):
                 f"{provider}_{venue_name.lower().replace(' ', '_')}",
                 provider,
                 venue_name,
-                "local_venue",
+                category,
             ),
         )
 
         venue_id = cur.fetchone()[0]
         conn.commit()
 
-        logging.info(f"Created new venue: {venue_name} ({venue_id})")
+        logging.info(
+            f"Created new venue: {venue_name} ({venue_id}) - Category: {category}"
+        )
         return venue_id
 
     except Exception as e:
@@ -489,12 +760,247 @@ def find_or_create_venue(venue_name, provider):
         conn.close()
 
 
-def upsert_events_to_db(events):
+def create_venue_from_config(venue_config):
+    """
+    Create venue data structure from venue configuration for processing.
+
+    Args:
+        venue_config (dict): Venue scraping configuration
+
+    Returns:
+        dict: Venue data dictionary for processing
+    """
+    try:
+        # Extract basic venue information from config
+        venue_name = venue_config["name"]
+        base_url = venue_config["base_url"]
+        category = venue_config.get("category", "local_venue")
+
+        # Create external_id
+        provider = venue_name.lower().replace(" ", "_")
+        external_id = f"{provider}_venue"
+
+        # Try to extract additional venue information from the main page
+        venue_description = ""
+        venue_address = ""
+        venue_phone = ""
+
+        # Attempt to scrape venue details from main page
+        try:
+            response = safe_scrape_request(base_url, timeout=5)
+            if response:
+                soup = BeautifulSoup(response.content, "html.parser")
+
+                # Try to extract description from common selectors
+                desc_selectors = [
+                    ".about",
+                    ".description",
+                    ".venue-info",
+                    ".intro",
+                    "meta[name='description']",
+                    ".hero-text",
+                    ".summary",
+                ]
+                for selector in desc_selectors:
+                    if selector.startswith("meta"):
+                        element = soup.select_one(selector)
+                        if element:
+                            venue_description = element.get("content", "")[:500]
+                            break
+                    else:
+                        element = soup.select_one(selector)
+                        if element:
+                            venue_description = element.get_text(strip=True)[:500]
+                            break
+
+                # Try to extract address
+                address_selectors = [
+                    ".address",
+                    ".location",
+                    ".contact-address",
+                    "[itemtype*='PostalAddress']",
+                    ".venue-address",
+                ]
+                for selector in address_selectors:
+                    element = soup.select_one(selector)
+                    if element:
+                        venue_address = element.get_text(strip=True)[:200]
+                        break
+
+                # Try to extract phone
+                phone_selectors = [
+                    ".phone",
+                    ".contact-phone",
+                    "[href^='tel:']",
+                    ".telephone",
+                ]
+                for selector in phone_selectors:
+                    element = soup.select_one(selector)
+                    if element:
+                        if selector.startswith("[href"):
+                            venue_phone = element.get("href", "").replace("tel:", "")
+                        else:
+                            venue_phone = element.get_text(strip=True)
+                        break
+
+        except Exception as e:
+            logging.debug(
+                f"Could not scrape additional venue details for {venue_name}: {e}"
+            )
+
+        # Create venue data structure
+        venue_data = {
+            "external_id": external_id,
+            "provider": provider,
+            "name": venue_name,
+            "description": venue_description,
+            "category": category,
+            "subcategory": category,  # Use category as subcategory for now
+            "website": base_url,
+            "address": venue_address,
+            "phone": venue_phone,
+            # Note: lat/lng will need to be geocoded later or obtained from another source
+            "lat": None,
+            "lng": None,
+            "scraped_at": datetime.now(),
+        }
+
+        return venue_data
+
+    except Exception as e:
+        logging.error(f"Error creating venue data from config: {e}")
+        return None
+
+
+def upsert_venues_to_db(venues):
+    """
+    Insert or update venues in the database using processed venue data.
+
+    Args:
+        venues (list): List of processed venue dictionaries
+    """
+    if not venues:
+        return
+
+    conn = get_db_conn()
+    cur = conn.cursor()
+
+    try:
+        for venue in venues:
+            # Check if venue already exists
+            cur.execute(
+                """
+                SELECT venue_id FROM venues 
+                WHERE external_id = %s AND provider = %s
+            """,
+                (venue["external_id"], venue["provider"]),
+            )
+
+            existing_venue = cur.fetchone()
+
+            if existing_venue:
+                # Update existing venue with processed data
+                cur.execute(
+                    """
+                    UPDATE venues SET
+                        name = %s,
+                        description = %s,
+                        category = %s,
+                        subcategory = %s,
+                        lat = %s,
+                        lng = %s,
+                        address = %s,
+                        phone = %s,
+                        website = %s,
+                        psychographic_relevance = %s,
+                        total_score = %s,
+                        quality_score = %s,
+                        popularity_score = %s,
+                        final_score = %s,
+                        venue_type = %s,
+                        size_estimate = %s,
+                        geocoding_quality = %s,
+                        content_hash = %s,
+                        updated_at = NOW()
+                    WHERE venue_id = %s
+                """,
+                    (
+                        venue["name"],
+                        venue.get("description"),
+                        venue["category"],
+                        venue.get("subcategory"),
+                        venue.get("lat"),
+                        venue.get("lng"),
+                        venue.get("address"),
+                        venue.get("phone"),
+                        venue.get("website"),
+                        venue.get("psychographic_relevance"),
+                        venue.get("total_score"),
+                        venue.get("quality_score"),
+                        venue.get("popularity_score"),
+                        venue.get("final_score"),
+                        venue.get("venue_type"),
+                        venue.get("size_estimate"),
+                        venue.get("geocoding_quality"),
+                        venue.get("content_hash"),
+                        existing_venue[0],
+                    ),
+                )
+            else:
+                # Insert new venue with processed data
+                cur.execute(
+                    """
+                    INSERT INTO venues (
+                        external_id, provider, name, description, category, subcategory,
+                        lat, lng, address, phone, website, psychographic_relevance,
+                        total_score, quality_score, popularity_score, final_score,
+                        venue_type, size_estimate, geocoding_quality, content_hash
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                """,
+                    (
+                        venue["external_id"],
+                        venue["provider"],
+                        venue["name"],
+                        venue.get("description"),
+                        venue["category"],
+                        venue.get("subcategory"),
+                        venue.get("lat"),
+                        venue.get("lng"),
+                        venue.get("address"),
+                        venue.get("phone"),
+                        venue.get("website"),
+                        venue.get("psychographic_relevance"),
+                        venue.get("total_score"),
+                        venue.get("quality_score"),
+                        venue.get("popularity_score"),
+                        venue.get("final_score"),
+                        venue.get("venue_type"),
+                        venue.get("size_estimate"),
+                        venue.get("geocoding_quality"),
+                        venue.get("content_hash"),
+                    ),
+                )
+
+        conn.commit()
+        logging.info(f"Processed {len(venues)} venues in database")
+
+    except Exception as e:
+        logging.error(f"Error upserting venues to database: {e}")
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def upsert_events_to_db(events, venue_category="local_venue"):
     """
     Insert or update events in the database
 
     Args:
         events (list): List of event dictionaries
+        venue_category (str): Category for venue creation
     """
     if not events:
         return
@@ -504,8 +1010,10 @@ def upsert_events_to_db(events):
 
     try:
         for event in events:
-            # Find or create venue
-            venue_id = find_or_create_venue(event["venue_name"], event["provider"])
+            # Find or create venue with category
+            venue_id = find_or_create_venue(
+                event["venue_name"], event["provider"], venue_category
+            )
             if not venue_id:
                 continue
 
@@ -586,27 +1094,91 @@ def upsert_events_to_db(events):
 
 def scrape_all_local_venues():
     """
-    Scrape events from all configured local venues
+    Scrape events from all configured local venues with data quality processing
     """
-    logging.info("Starting local venue scraping")
+    logging.info("Starting local venue scraping with data quality checks")
 
-    all_events = []
+    # Group events by venue category for proper database insertion
+    events_by_category = {}
+    venue_quality_reports = {}
+
+    # Collect venues for processing
+    venues_to_process = []
 
     for venue_key, venue_config in VENUE_SCRAPERS.items():
+        venue_name = venue_config["name"]
         try:
-            events = scrape_venue_events(venue_config)
-            all_events.extend(events)
+            # Scrape raw events
+            raw_events = scrape_venue_events(venue_config)
+
+            if raw_events:
+                # Process events through data quality pipeline
+                processed_events, quality_report = process_events_with_quality_checks(
+                    raw_events
+                )
+
+                # Log quality metrics for this venue
+                log_quality_metrics(quality_report, venue_name)
+                venue_quality_reports[venue_name] = quality_report
+
+                if processed_events:
+                    category = venue_config.get("category", "local_venue")
+                    if category not in events_by_category:
+                        events_by_category[category] = []
+                    events_by_category[category].extend(processed_events)
+
+                    logging.info(
+                        f"{venue_name}: {quality_report['total_input']} raw -> {quality_report['total_output']} processed events"
+                    )
+
+            # Create venue data for processing
+            venue_data = create_venue_from_config(venue_config)
+            if venue_data:
+                venues_to_process.append(venue_data)
 
             # Add delay between venues to be respectful
             time.sleep(2)
 
         except Exception as e:
-            logging.error(f"Failed to scrape {venue_config['name']}: {e}")
+            logging.error(f"Failed to scrape {venue_name}: {e}")
 
-    # Store all events in database
-    if all_events:
-        upsert_events_to_db(all_events)
-        logging.info(f"Total events scraped: {len(all_events)}")
+    # Process venues through unified venue processing pipeline
+    if venues_to_process:
+        logging.info(
+            f"Processing {len(venues_to_process)} venues through quality pipeline"
+        )
+        processed_venues, venue_quality_report = process_venues_with_quality_checks(
+            venues_to_process
+        )
+
+        if processed_venues:
+            upsert_venues_to_db(processed_venues)
+            log_venue_quality_metrics(venue_quality_report, "local_venues")
+            logging.info(f"Processed and stored {len(processed_venues)} venues")
+
+    # Store events in database by category
+    total_events = 0
+    for category, events in events_by_category.items():
+        if events:
+            upsert_events_to_db(events, category)
+            total_events += len(events)
+            logging.info(
+                f"Processed {len(events)} quality-checked events for category: {category}"
+            )
+
+    # Log overall quality summary
+    total_raw = sum(
+        report.get("total_input", 0) for report in venue_quality_reports.values()
+    )
+    total_processed = sum(
+        report.get("total_output", 0) for report in venue_quality_reports.values()
+    )
+
+    if total_events > 0:
+        logging.info(
+            f"Quality processing summary: {total_raw} raw events -> {total_processed} final events"
+        )
+        logging.info(f"Total events stored in database: {total_events}")
     else:
         logging.info("No events scraped from local venues")
 

@@ -20,13 +20,13 @@ from psycopg2.extras import RealDictCursor
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 try:
-    from backend.visualization.interactive_map_builder import InteractiveMapBuilder
-    from features.college_layer import CollegeLayer
-    from features.spending_propensity_layer import (
+    from src.backend.visualization.interactive_map_builder import InteractiveMapBuilder
+    from src.features.college_layer import CollegeLayer
+    from src.features.spending_propensity_layer import (
         SpendingPropensityLayer,
         DemographicProfile,
     )
-    from etl.utils import get_db_conn
+    from src.etl.utils import get_db_conn
 
     print("✓ Successfully imported required modules")
 except ImportError as e:

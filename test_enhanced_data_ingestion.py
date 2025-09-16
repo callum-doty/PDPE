@@ -26,7 +26,7 @@ def test_social_data_ingestion():
     print("=" * 60)
 
     try:
-        from etl.ingest_social import (
+        from src.etl.ingest_social import (
             setup_twitter_api,
             fetch_twitter_mentions,
             analyze_business_sentiment,
@@ -90,7 +90,7 @@ def test_economic_data_ingestion():
     print("=" * 60)
 
     try:
-        from etl.ingest_econ import (
+        from src.etl.ingest_econ import (
             fetch_fred_economic_data,
             fetch_bls_unemployment_data,
             fetch_business_news_sentiment,
@@ -163,7 +163,7 @@ def test_traffic_data_ingestion():
     print("=" * 60)
 
     try:
-        from etl.ingest_traffic import (
+        from src.etl.ingest_traffic import (
             setup_google_maps_client,
             calculate_congestion_score,
             fetch_directions_with_traffic,
@@ -215,7 +215,7 @@ def test_local_venues_ingestion():
     print("=" * 60)
 
     try:
-        from etl.ingest_local_venues import (
+        from src.etl.ingest_local_venues import (
             safe_scrape_request,
             parse_event_date,
             classify_event_psychographics,
@@ -320,7 +320,7 @@ def test_database_schema():
     print("=" * 60)
 
     try:
-        from etl.utils import get_db_conn
+        from src.etl.utils import get_db_conn
 
         conn = get_db_conn()
         cur = conn.cursor()

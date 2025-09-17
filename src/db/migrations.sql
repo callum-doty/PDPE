@@ -45,7 +45,8 @@ CREATE TABLE events (
   actual_attendance INT,
   psychographic_relevance JSONB,       -- career_driven, competent, fun scores
   created_at TIMESTAMP DEFAULT now(),
-  updated_at TIMESTAMP DEFAULT now()
+  updated_at TIMESTAMP DEFAULT now(),
+  UNIQUE(external_id, provider)
 );
 
 -- Foot traffic / visits (time-series per venue)
@@ -83,12 +84,17 @@ CREATE TABLE weather_data (
   temperature_f FLOAT,
   feels_like_f FLOAT,
   humidity FLOAT,
+  pressure FLOAT,
+  wind_speed_mph FLOAT,
+  wind_direction FLOAT,
+  weather_condition TEXT,
+  weather_description TEXT,
   rain_probability FLOAT,
   precipitation_mm FLOAT,
-  wind_speed_mph FLOAT,
-  weather_condition TEXT,
   uv_index FLOAT,
-  created_at TIMESTAMP DEFAULT now()
+  visibility FLOAT,
+  created_at TIMESTAMP DEFAULT now(),
+  UNIQUE(ts, lat, lng)
 );
 
 -- Social sentiment data

@@ -2,11 +2,26 @@
 import os
 import logging
 import re
+import random
 from datetime import datetime, timedelta
-from textblob import TextBlob
-import tweepy
-import requests
 from etl.utils import get_db_conn
+
+# Try to import optional dependencies
+try:
+    from textblob import TextBlob
+
+    HAS_TEXTBLOB = True
+except ImportError:
+    HAS_TEXTBLOB = False
+    logging.warning("TextBlob not available - using simple sentiment analysis")
+
+try:
+    import tweepy
+
+    HAS_TWEEPY = True
+except ImportError:
+    HAS_TWEEPY = False
+    logging.warning("Tweepy not available - using mock Twitter data")
 
 # API Keys
 TWITTER_API_KEY = os.getenv("TWITTER_API_KEY")
@@ -72,13 +87,24 @@ def setup_twitter_api():
         logging.error("TWITTER_API_KEY not set - cannot fetch Twitter data")
         return None
 
+    if not HAS_TWEEPY:
+        logging.error("Tweepy not installed - cannot fetch Twitter data")
+        return None
+
     try:
-        # Note: This is a simplified setup - you may need OAuth tokens depending on your Twitter API access level
-        auth = tweepy.AppAuthHandler(
-            TWITTER_API_KEY, ""
-        )  # Add consumer secret if available
-        api = tweepy.API(auth, wait_on_rate_limit=True)
-        return api
+        # Try Bearer Token authentication first (Twitter API v2)
+        if len(TWITTER_API_KEY) > 50:  # Bearer tokens are longer
+            client = tweepy.Client(
+                bearer_token=TWITTER_API_KEY, wait_on_rate_limit=True
+            )
+            return client
+        else:
+            # Fallback to API v1.1 with consumer key (requires consumer secret)
+            # For now, we'll skip Twitter if we don't have proper bearer token
+            logging.warning(
+                "Twitter API key appears to be consumer key, not bearer token. Skipping Twitter integration."
+            )
+            return None
     except Exception as e:
         logging.error(f"Failed to setup Twitter API: {e}")
         return None
@@ -129,8 +155,8 @@ def fetch_twitter_mentions(
     Returns:
         list: List of tweet data
     """
-    api = setup_twitter_api()
-    if not api:
+    client = setup_twitter_api()
+    if not client:
         return []
 
     tweets_data = []
@@ -154,28 +180,39 @@ def fetch_twitter_mentions(
 
         query = " OR ".join(query_parts)
 
-        # Search tweets
-        since_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-        tweets = tweepy.Cursor(
-            api.search_tweets, q=query, since=since_date, lang="en", result_type="mixed"
-        ).items(100)
+        # Search tweets using Twitter API v2
+        start_time = (datetime.now() - timedelta(days=days_back)).isoformat()
 
-        for tweet in tweets:
-            sentiment = analyze_sentiment(tweet.text)
-            psychographic_keywords = extract_psychographic_keywords(tweet.text)
+        tweets = client.search_recent_tweets(
+            query=query,
+            start_time=start_time,
+            max_results=100,
+            tweet_fields=["created_at", "public_metrics", "author_id"],
+            user_fields=["public_metrics"],
+        )
 
-            tweet_data = {
-                "platform": "twitter",
-                "text": tweet.text,
-                "created_at": tweet.created_at,
-                "user_followers": tweet.user.followers_count,
-                "retweet_count": tweet.retweet_count,
-                "favorite_count": tweet.favorite_count,
-                "sentiment": sentiment,
-                "psychographic_keywords": psychographic_keywords,
-                "engagement_score": tweet.retweet_count + tweet.favorite_count,
-            }
-            tweets_data.append(tweet_data)
+        if tweets.data:
+            for tweet in tweets.data:
+                sentiment = analyze_sentiment(tweet.text)
+                psychographic_keywords = extract_psychographic_keywords(tweet.text)
+
+                # Get metrics safely
+                metrics = tweet.public_metrics or {}
+                retweet_count = metrics.get("retweet_count", 0)
+                like_count = metrics.get("like_count", 0)
+
+                tweet_data = {
+                    "platform": "twitter",
+                    "text": tweet.text,
+                    "created_at": tweet.created_at,
+                    "user_followers": 0,  # Would need additional API call to get user info
+                    "retweet_count": retweet_count,
+                    "favorite_count": like_count,
+                    "sentiment": sentiment,
+                    "psychographic_keywords": psychographic_keywords,
+                    "engagement_score": retweet_count + like_count,
+                }
+                tweets_data.append(tweet_data)
 
     except Exception as e:
         logging.error(f"Failed to fetch Twitter data: {e}")

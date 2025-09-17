@@ -8,9 +8,6 @@ from etl.utils import safe_request, get_db_conn, logging
 
 FOOT_KEY = os.getenv("FOOT_TRAFFIC_API_KEY")
 
-# Note: Mock data generation removed to ensure API failures are transparent
-# Only real BestTime API data is used - no synthetic fallbacks
-
 
 def fetch_foot_traffic(venue_external_id, venue_type=None):
     """
@@ -21,13 +18,13 @@ def fetch_foot_traffic(venue_external_id, venue_type=None):
         venue_type (str): Type of venue for fallback data generation
 
     Returns:
-        dict: Foot traffic data
+        dict: Foot traffic data or None if no API key available
     """
     if not FOOT_KEY:
         logging.error(
             "FOOT_TRAFFIC_API_KEY not set - cannot fetch real foot traffic data"
         )
-        raise ValueError("FOOT_TRAFFIC_API_KEY is required for foot traffic data")
+        return None
 
     try:
         # BestTime API endpoint for venue analysis

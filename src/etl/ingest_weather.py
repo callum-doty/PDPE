@@ -303,8 +303,7 @@ def upsert_weather_to_db(weather_records):
                     rain_probability = EXCLUDED.rain_probability,
                     precipitation_mm = EXCLUDED.precipitation_mm,
                     uv_index = EXCLUDED.uv_index,
-                    visibility = EXCLUDED.visibility,
-                    updated_at = CURRENT_TIMESTAMP
+                    visibility = EXCLUDED.visibility
             """,
                 (
                     ts,
@@ -419,9 +418,9 @@ if __name__ == "__main__":
                 f"Sample record: {sample_record['weather_condition']} at {sample_record['temperature_f']}°F"
             )
 
-            # Uncomment to save to database (requires database setup)
-            # upsert_weather_to_db(weather_records)
-            # print("Weather data saved to database")
+            # Save to database
+            upsert_weather_to_db(weather_records)
+            print("Weather data saved to database")
         else:
             print("No weather records fetched")
 

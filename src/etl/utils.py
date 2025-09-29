@@ -5,11 +5,17 @@ import psycopg2
 from psycopg2.extras import execute_values
 from datetime import datetime, timezone
 import logging
+from dotenv import load_dotenv
 
-DB_DSN = os.getenv("DATABASE_URL")  # e.g. postgres://user:pass@host:5432/dbname
+# Load environment variables from .env file
+load_dotenv()
+
+DB_DSN = os.getenv("DATABASE_URL", "postgresql://postgres:@localhost:5432/ppm")
 
 
 def get_db_conn():
+    if not DB_DSN:
+        raise ValueError("DATABASE_URL not configured")
     return psycopg2.connect(DB_DSN)
 
 

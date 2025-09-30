@@ -17,64 +17,85 @@ PPM (Psychographic Prediction Machine) is an advanced geospatial analytics platf
 
 ## 🏗️ Architecture
 
+PPM has been restructured into a clean, feature-based architecture optimized for personal use and maintainability:
+
 ```
 PPM/
-├── src/
-│   ├── db/                        # Database layer
-│   │   ├── migrations.sql         # PostgreSQL + PostGIS schema
-│   │   └── models.py             # SQLAlchemy data models
+├── app/                              # Personal web interface
+│   ├── main.py                       # Streamlit application
+│   └── static/                       # Static assets
+│
+├── features/                         # Core feature modules
+│   ├── venues/                       # Venue aggregation
+│   │   ├── scrapers/                 # Venue data scrapers
+│   │   │   ├── static_venue_scraper.py
+│   │   │   ├── dynamic_venue_scraper.py
+│   │   │   └── kc_event_scraper.py
+│   │   ├── collectors/               # Venue data collectors
+│   │   │   └── venue_collector.py
+│   │   ├── processors/               # Venue data processing
+│   │   │   └── venue_processing.py
+│   │   └── models.py                 # Venue data models
 │   │
-│   ├── etl/                      # Data ingestion layer
-│   │   ├── ingest_places.py      # Google Places API integration
-│   │   ├── ingest_events.py      # Eventbrite/Ticketmaster/PredictHQ
-│   │   ├── ingest_foot_traffic.py # Foot traffic data
-│   │   ├── ingest_weather.py     # Weather API integration
-│   │   ├── ingest_census.py      # Census demographic data
-│   │   ├── ingest_traffic.py     # Traffic congestion data
-│   │   ├── ingest_social.py      # Twitter/Facebook sentiment
-│   │   ├── ingest_economic.py    # Economic indicators
-│   │   ├── enrich_geo.py         # Geospatial enrichment
-│   │   └── utils.py              # Database utilities
+│   ├── events/                       # Event aggregation
+│   │   ├── collectors/               # Event data collectors
+│   │   │   └── external_api_collector.py
+│   │   ├── scrapers/                 # Event scrapers
+│   │   ├── processors/               # Event processing
+│   │   └── models.py                 # Event data models
 │   │
-│   ├── features/                 # Feature engineering
-│   │   ├── build_features.py     # Comprehensive feature pipeline
-│   │   ├── labeling.py           # Manual + proxy labeling system
-│   │   ├── college_layer.py      # College population density
-│   │   └── spending_propensity_layer.py # Spending potential analysis
-│   │
-│   ├── backend/                  # ML and serving layer
+│   ├── ml/                           # ML predictions
 │   │   ├── models/
-│   │   │   ├── train.py          # Multi-model training pipeline
-│   │   │   ├── serve.py          # FastAPI prediction service
-│   │   │   ├── xgboost_model.py  # Gradient boosted trees
-│   │   │   ├── neural_model.py   # Neural network implementation
-│   │   │   ├── graph_model.py    # Graph neural networks
-│   │   │   └── bayesian_model.py # Bayesian uncertainty models
-│   │   ├── routes/               # API endpoints
-│   │   ├── services/             # Business logic services
-│   │   └── visualization/        # Interactive map builder
-│   │       └── interactive_map_builder.py # Folium-based map generation
+│   │   │   ├── training/             # Training pipeline
+│   │   │   │   └── train_model.py
+│   │   │   └── inference/            # Prediction service
+│   │   │       └── predictor.py
+│   │   └── features/                 # Psychographic layers
+│   │       ├── college_layer.py
+│   │       └── spending_propensity_layer.py
 │   │
-│   └── infra/                   # Infrastructure and orchestration
-│       ├── prefect_flows.py     # Workflow orchestration
-│       ├── docker/              # Container configurations
-│       └── monitoring/          # Performance monitoring
+│   └── visualization/                # Map creation
+│       ├── builders/                 # Map builders
+│       │   └── interactive_map_builder.py
+│       ├── exporters/                # Export utilities
+│       └── styles/                   # Visualization styles
 │
-├── config/                      # Configuration management
-│   ├── settings.py             # Environment configuration
-│   └── constants.py            # Psychographic scoring weights
+├── shared/                           # Shared utilities
+│   ├── database/                     # Database utilities
+│   │   ├── connection.py             # Database connections
+│   │   └── migrations.sql            # Database schema
+│   ├── data_quality/                 # Quality control
+│   │   └── quality_controller.py
+│   ├── orchestration/               # Data orchestration
+│   │   └── master_data_orchestrator.py
+│   └── data_interface/              # Unified data access
+│       └── master_data_interface.py  # Single source of truth
 │
-├── data/                       # Data storage
-│   ├── raw/                    # Raw API responses
-│   ├── processed/              # Feature-engineered datasets
-│   ├── models/                 # Trained model artifacts
-│   └── exports/                # Generated predictions
+├── scripts/                          # Standalone scripts
+│   ├── venues/                       # Venue scripts
+│   │   └── run_venue_scraper.py
+│   ├── events/                       # Event scripts
+│   │   └── run_event_scraper.py
+│   ├── ml/                           # ML scripts
+│   │   ├── train_model.py
+│   │   └── generate_predictions.py
+│   └── visualization/                # Visualization scripts
+│       └── generate_heatmap.py
 │
-├── notebooks/                  # Analysis and experimentation
-├── tests/                      # Test suites
-├── requirements.txt            # Python dependencies
-├── docker-compose.yml          # Multi-service deployment
-└── .env                        # Environment variables
+├── config/                           # Configuration management
+│   ├── settings.py                   # Environment configuration
+│   └── constants.py                  # Psychographic scoring weights
+│
+├── data/                             # Data storage
+│   ├── raw/                          # Raw API responses
+│   ├── processed/                    # Feature-engineered datasets
+│   ├── cache/                        # Cached data
+│   └── exports/                      # Generated predictions
+│
+├── tests/                            # Test suites
+├── docs/                             # Documentation
+├── requirements.txt                  # Python dependencies
+└── .env                              # Environment variables
 ```
 
 ## 🚀 Quick Start
@@ -139,17 +160,28 @@ PPM/
 4. **Run the system:**
 
    ```bash
-   # Start data ingestion
-   python -m src.infra.prefect_flows
+   # Start the personal web interface
+   python app/main.py
 
-   # Train models
-   python -m src.backend.models.train
+   # Or run individual components:
 
-   # Start API server
-   python -m src.backend.models.serve
+   # Collect venue data
+   python scripts/venues/run_venue_scraper.py
 
-   # Generate interactive visualizations
-   python test_visualization.py
+   # Collect event data
+   python scripts/events/run_event_scraper.py
+
+   # Train ML models
+   python scripts/ml/train_model.py
+
+   # Generate predictions
+   python scripts/ml/generate_predictions.py
+
+   # Create visualizations
+   python scripts/visualization/generate_heatmap.py
+
+   # Test the unified data interface
+   python test_unified_simple_map_demo.py
    ```
 
 ## 🗺️ Interactive Map Visualizations
@@ -166,7 +198,7 @@ PPM/
 ### Usage Example
 
 ```python
-from src.backend.visualization.interactive_map_builder import InteractiveMapBuilder
+from features.visualization.builders.interactive_map_builder import InteractiveMapBuilder
 
 # Initialize map builder
 builder = InteractiveMapBuilder(center_coords=(39.0997, -94.5786))
@@ -218,7 +250,7 @@ builder.open_in_browser(map_file)
 ### Training Pipeline
 
 ```python
-from src.backend.models.train import PsychographicPredictor
+from features.ml.models.training.train_model import PsychographicPredictor
 
 # Initialize multi-model trainer
 predictor = PsychographicPredictor(

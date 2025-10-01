@@ -167,3 +167,55 @@ def process_venues_with_quality_checks(venues: List[Dict]) -> Tuple[List[Dict], 
     )
 
     return processed_venues, quality_metrics
+
+
+class QualityController:
+    """
+    Quality Controller class for backward compatibility
+    Provides a unified interface for data quality operations
+    """
+
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+
+    def process_events(self, events: List[Dict]) -> Tuple[List[Dict], Dict]:
+        """Process events with quality checks"""
+        return process_events_with_quality_checks(events)
+
+    def process_venues(self, venues: List[Dict]) -> Tuple[List[Dict], Dict]:
+        """Process venues with quality checks"""
+        return process_venues_with_quality_checks(venues)
+
+    def log_metrics(self, quality_report: Dict, source: str):
+        """Log quality metrics"""
+        log_quality_metrics(quality_report, source)
+
+    def validate_data(self, data: List[Dict], data_type: str = "generic") -> Dict:
+        """
+        Validate data and return quality metrics
+
+        Args:
+            data: List of data dictionaries
+            data_type: Type of data ('events', 'venues', or 'generic')
+
+        Returns:
+            Quality metrics dictionary
+        """
+        if data_type == "events":
+            _, metrics = self.process_events(data)
+        elif data_type == "venues":
+            _, metrics = self.process_venues(data)
+        else:
+            # Generic validation
+            metrics = {
+                "total_items": len(data),
+                "valid_items": len([item for item in data if item.get("name")]),
+                "data_completeness_score": (
+                    len([item for item in data if item.get("name")]) / len(data)
+                    if data
+                    else 0
+                ),
+                "quality_issues": [],
+            }
+
+        return metrics

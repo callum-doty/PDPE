@@ -1334,3 +1334,7 @@ class UnifiedVenueCollector:
         finally:
             cur.close()
             conn.close()
+
+
+# Create an alias for backward compatibility
+VenueCollector = UnifiedVenueCollector

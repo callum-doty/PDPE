@@ -24,36 +24,31 @@ def process_venues_with_quality_checks(venues: List[Dict]) -> Tuple[List[Dict], 
         f"Processing {len(venues)} venues with quality checks (compatibility mode)"
     )
 
-    # Delegate to data_quality module
-    try:
-        from etl.data_quality import process_venues_with_quality_checks as quality_check
+    # Use fallback implementation since ETL module no longer exists
+    # Fallback implementation
+    processed_venues = []
+    quality_metrics = {
+        "total_venues": len(venues),
+        "valid_venues": 0,
+        "invalid_venues": 0,
+        "missing_fields": {},
+        "data_completeness_score": 0.0,
+        "quality_issues": [],
+    }
 
-        return quality_check(venues)
-    except ImportError:
-        # Fallback implementation
-        processed_venues = []
-        quality_metrics = {
-            "total_venues": len(venues),
-            "valid_venues": 0,
-            "invalid_venues": 0,
-            "missing_fields": {},
-            "data_completeness_score": 0.0,
-            "quality_issues": [],
-        }
+    for venue in venues:
+        if venue.get("name"):
+            processed_venues.append(venue)
+            quality_metrics["valid_venues"] += 1
+        else:
+            quality_metrics["invalid_venues"] += 1
 
-        for venue in venues:
-            if venue.get("name"):
-                processed_venues.append(venue)
-                quality_metrics["valid_venues"] += 1
-            else:
-                quality_metrics["invalid_venues"] += 1
+    if quality_metrics["total_venues"] > 0:
+        quality_metrics["data_completeness_score"] = (
+            quality_metrics["valid_venues"] / quality_metrics["total_venues"]
+        )
 
-        if quality_metrics["total_venues"] > 0:
-            quality_metrics["data_completeness_score"] = (
-                quality_metrics["valid_venues"] / quality_metrics["total_venues"]
-            )
-
-        return processed_venues, quality_metrics
+    return processed_venues, quality_metrics
 
 
 def enrich_venue_data(venue: Dict) -> Dict:

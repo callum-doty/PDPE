@@ -11,14 +11,35 @@ from pathlib import Path
 import webbrowser
 import json
 import numpy as np
-from backend.services.venue_data_service import (
-    VenueDataService,
-    VenueDataType,
-    VenueDataQuery,
-    get_heatmap_data,
-    get_layered_map_data,
-    get_venue_rankings,
-)
+
+# Note: These imports are commented out as the backend service layer is not yet implemented
+# from backend.services.venue_data_service import (
+#     VenueDataService,
+#     VenueDataType,
+#     VenueDataQuery,
+#     get_heatmap_data,
+#     get_layered_map_data,
+#     get_venue_rankings,
+# )
+
+
+# Placeholder functions for service-based methods
+def get_heatmap_data(bbox=None, min_score=0.0, categories=None):
+    """Placeholder for heatmap data service"""
+    return {"venues": [], "predictions": [], "bounds": {}}
+
+
+def get_layered_map_data(
+    bbox=None, include_api_layers=True, include_assumption_layers=True
+):
+    """Placeholder for layered map data service"""
+    return {"api_layers": {}, "assumption_layers": {}}
+
+
+def get_venue_rankings(bbox=None, limit=50):
+    """Placeholder for venue rankings service"""
+    return []
+
 
 logger = logging.getLogger(__name__)
 

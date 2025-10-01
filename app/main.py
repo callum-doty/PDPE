@@ -23,6 +23,9 @@ try:
         InteractiveMapBuilder,
     )
     from shared.database.connection import get_database_connection
+
+    # Use the available database connection function
+    get_db_conn = get_database_connection
 except ImportError as e:
     st.error(f"Import error: {e}")
     st.error("Please ensure you're running from the PPM root directory")
@@ -133,16 +136,16 @@ def add_venues_to_map(m: folium.Map):
         with get_database_connection() as db:
             venues = db.execute_query(
                 """
-                SELECT name, latitude, longitude, category, avg_rating
+                SELECT name, lat, lng, category, avg_rating
                 FROM venues 
-                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+                WHERE lat IS NOT NULL AND lng IS NOT NULL
                 LIMIT 100
             """
             )
 
             for venue in venues:
                 folium.Marker(
-                    location=[venue["latitude"], venue["longitude"]],
+                    location=[venue["lat"], venue["lng"]],
                     popup=f"{venue['name']}<br>Category: {venue['category']}<br>Rating: {venue['avg_rating']}",
                     icon=folium.Icon(color="blue", icon="building"),
                 ).add_to(m)
@@ -155,11 +158,12 @@ def add_events_to_map(m: folium.Map, start_date, end_date):
     """Add event markers to map"""
     try:
         with get_database_connection() as db:
+            # Use the master_events_data view which has the correct columns
             events = db.execute_query(
                 """
-                SELECT name, latitude, longitude, start_time, venue_name
-                FROM events 
-                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+                SELECT name, lat, lng, start_time, venue_name
+                FROM master_events_data 
+                WHERE lat IS NOT NULL AND lng IS NOT NULL
                 AND start_time BETWEEN ? AND ?
                 LIMIT 100
             """,
@@ -168,7 +172,7 @@ def add_events_to_map(m: folium.Map, start_date, end_date):
 
             for event in events:
                 folium.Marker(
-                    location=[event["latitude"], event["longitude"]],
+                    location=[event["lat"], event["lng"]],
                     popup=f"{event['name']}<br>Venue: {event['venue_name']}<br>Time: {event['start_time']}",
                     icon=folium.Icon(color="red", icon="calendar"),
                 ).add_to(m)
@@ -211,8 +215,8 @@ def display_recent_activity():
         with get_database_connection() as db:
             recent_venues = db.execute_query(
                 """
-                SELECT name, scraped_at FROM venues 
-                ORDER BY scraped_at DESC LIMIT 5
+                SELECT name, created_at FROM venues 
+                ORDER BY created_at DESC LIMIT 5
             """
             )
 

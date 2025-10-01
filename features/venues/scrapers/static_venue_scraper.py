@@ -21,10 +21,10 @@ def scrape_all_local_venues() -> Dict[str, Any]:
 
     try:
         # Import the unified venue collector
-        from data_collectors.venue_collector import UnifiedVenueCollector
+        from features.venues.collectors.venue_collector import VenueCollector
 
         # Initialize and run the collector
-        collector = UnifiedVenueCollector()
+        collector = VenueCollector()
         result = collector.collect_data()
 
         return {
@@ -61,10 +61,10 @@ def ingest_local_venue_data(area_bounds: Optional[Dict] = None) -> Dict[str, Any
 
     try:
         # Import the unified venue collector
-        from data_collectors.venue_collector import UnifiedVenueCollector
+        from features.venues.collectors.venue_collector import VenueCollector
 
         # Initialize and run the collector
-        collector = UnifiedVenueCollector()
+        collector = VenueCollector()
         result = collector.collect_data(area_bounds=area_bounds)
 
         return {
@@ -93,7 +93,7 @@ def get_local_venues_from_db() -> List[Dict]:
     logger.info("Getting local venues from database (compatibility mode)")
 
     try:
-        from etl.utils import get_db_conn
+        from shared.database.connection import get_db_conn
 
         conn = get_db_conn()
         if not conn:
@@ -151,7 +151,7 @@ def update_venue_scores() -> Dict[str, Any]:
     logger.info("Updating venue scores (compatibility mode)")
 
     try:
-        from etl.utils import get_db_conn
+        from shared.database.connection import get_db_conn
 
         conn = get_db_conn()
         if not conn:

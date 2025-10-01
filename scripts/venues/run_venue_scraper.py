@@ -18,7 +18,6 @@ sys.path.append(
 from features.venues.scrapers.static_venue_scraper import StaticVenueScraper
 from features.venues.scrapers.dynamic_venue_scraper import DynamicVenueScraper
 from features.venues.collectors.venue_collector import VenueCollector
-from features.venues.processors.venue_processing import VenueProcessor
 from shared.database.connection import get_database_connection
 
 # Configure logging
@@ -81,11 +80,12 @@ def run_venue_processing():
     logger.info("Starting venue data processing...")
 
     try:
-        processor = VenueProcessor()
-        result = processor.process_all_venues()
+        # VenueProcessor no longer exists, use VenueCollector instead
+        collector = VenueCollector()
+        result = collector.collect_data()
 
         logger.info(f"Venue processing completed: {result}")
-        return result
+        return {"success": True, "venues_collected": result.venues_collected}
 
     except Exception as e:
         logger.error(f"Venue processing failed: {e}")

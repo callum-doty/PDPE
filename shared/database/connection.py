@@ -79,3 +79,8 @@ class DatabaseConnection:
 def get_database_connection() -> DatabaseConnection:
     """Get a database connection instance"""
     return DatabaseConnection()
+
+
+def get_db_conn() -> DatabaseConnection:
+    """Legacy function name for backward compatibility"""
+    return get_database_connection()

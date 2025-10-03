@@ -40,7 +40,7 @@ except ImportError as e:
 
 
 try:
-    from etl.utils import get_db_conn
+    from shared.database.connection import get_db_conn
 except ImportError:
 
     def get_db_conn():

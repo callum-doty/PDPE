@@ -22,9 +22,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
-    from etl.utils import get_db_conn
-    from etl.data_quality import process_events_with_quality_checks, log_quality_metrics
-    from master_data_service.quality_controller import QualityController
+    from shared.database.connection import get_db_conn
+    from shared.data_quality.quality_controller import (
+        process_events_with_quality_checks,
+        log_quality_metrics,
+        QualityController,
+    )
 except ImportError as e:
     logging.warning(f"Could not import some modules: {e}")
 
@@ -149,16 +152,18 @@ class KCEventScraper:
         },
     }
 
-    def __init__(self, llm_client=None, use_browser_for_all=False):
+    def __init__(self, llm_client=None, use_browser_for_all=False, force_llm_only=True):
         """
         Initialize scraper
 
         Args:
             llm_client: Optional LLM client for extraction
             use_browser_for_all: Force browser rendering for all sites
+            force_llm_only: Force LLM extraction for all venues (no fallback to selectors)
         """
         self.llm_client = llm_client or self._initialize_openai_client()
         self.use_browser_for_all = use_browser_for_all
+        self.force_llm_only = force_llm_only
         self.html_converter = html2text.HTML2Text()
         self.html_converter.ignore_links = False
         self.html_converter.ignore_images = True
@@ -500,17 +505,30 @@ Content:
             logger.error(f"Failed to fetch {venue_name}")
             return []
 
-        # Extract events
+        # Extract events with LLM (preferred method)
         if self.llm_client:
             events = self.extract_with_llm(html, venue_name)
-            if events:
-                logger.info(f"✅ Found {len(events)} events at {venue_name} (LLM)")
+            logger.info(f"✅ Found {len(events)} events at {venue_name} (LLM)")
+
+            # If force_llm_only is True, return LLM results regardless of count
+            if self.force_llm_only:
                 return events
 
-        # Fallback to selectors
-        events = self.extract_with_selectors(html, venue_name)
-        logger.info(f"✅ Found {len(events)} events at {venue_name} (Selectors)")
-        return events
+            # Otherwise, only return LLM results if we found events
+            if events:
+                return events
+
+        # Fallback to selectors (only if not forcing LLM-only)
+        if not self.force_llm_only:
+            events = self.extract_with_selectors(html, venue_name)
+            logger.info(f"✅ Found {len(events)} events at {venue_name} (Selectors)")
+            return events
+
+        # If we're forcing LLM-only and no LLM client, return empty
+        logger.warning(
+            f"No LLM client available and force_llm_only=True for {venue_name}"
+        )
+        return []
 
     def scrape_all(
         self, venue_filter: List[str] = None, delay: float = 2.0

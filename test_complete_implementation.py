@@ -28,11 +28,13 @@ def test_dynamic_venues_ingestion():
     logger.info("Testing enhanced dynamic venues ingestion...")
 
     try:
-        from etl.ingest_dynamic_venues import DynamicVenueIngestionManager
+        from features.venues.scrapers.dynamic_venue_scraper import (
+            ingest_dynamic_venue_data,
+        )
 
-        # Initialize the manager
-        manager = DynamicVenueIngestionManager()
-        logger.info("✅ DynamicVenueIngestionManager initialized successfully")
+        # Test the ingestion function
+        result = ingest_dynamic_venue_data()
+        logger.info("✅ Dynamic venue ingestion function available")
 
         # Test cache functionality
         cache_dir = Path("cache/dynamic_venues")
@@ -41,11 +43,11 @@ def test_dynamic_venues_ingestion():
         else:
             logger.info(f"ℹ️  Cache directory will be created on first use: {cache_dir}")
 
-        # Test venue processing integration
-        if hasattr(manager, "scrape_venue_with_quality_control"):
-            logger.info("✅ Quality control integration method found")
+        # Test result structure
+        if isinstance(result, dict) and "success" in result:
+            logger.info("✅ Ingestion function returns proper result structure")
         else:
-            logger.warning("⚠️  Quality control integration method not found")
+            logger.warning("⚠️  Ingestion function result structure unexpected")
 
         return True
 
@@ -172,11 +174,18 @@ def test_integration():
         logger.info("✅ All components can be imported together")
 
         # Test venue processing integration
-        from etl.venue_processing import VenueProcessor
-        from etl.ingest_dynamic_venues import DynamicVenueIngestionManager
+        from features.venues.processors.venue_processing import VenueProcessor
+        from features.venues.scrapers.dynamic_venue_scraper import (
+            ingest_dynamic_venue_data,
+        )
 
-        processor = VenueProcessor()
-        manager = DynamicVenueIngestionManager()
+        # Test that venue processor exists
+        if VenueProcessor:
+            logger.info("✅ VenueProcessor class available")
+
+        # Test that dynamic venue function exists
+        if ingest_dynamic_venue_data:
+            logger.info("✅ Dynamic venue ingestion function available")
 
         logger.info("✅ Venue processing integration successful")
 

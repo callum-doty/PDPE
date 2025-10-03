@@ -19,6 +19,7 @@ class DatabaseConnection:
             "DATABASE_URL", "sqlite:///ppm.db"
         )
         self.connection = None
+        self.db_type = None
 
     def connect(self):
         """Establish database connection"""
@@ -27,9 +28,11 @@ class DatabaseConnection:
                 db_path = self.database_url.replace("sqlite:///", "")
                 self.connection = sqlite3.connect(db_path)
                 self.connection.row_factory = sqlite3.Row
+                self.db_type = "sqlite"
                 logger.info(f"Connected to SQLite database: {db_path}")
             elif self.database_url.startswith("postgresql"):
                 self.connection = psycopg2.connect(self.database_url)
+                self.db_type = "postgresql"
                 logger.info("Connected to PostgreSQL database")
             else:
                 raise ValueError(f"Unsupported database URL: {self.database_url}")
@@ -45,20 +48,46 @@ class DatabaseConnection:
             self.connection = None
             logger.info("Database connection closed")
 
+    def _convert_query_placeholders(self, query: str) -> str:
+        """Convert query placeholders based on database type"""
+        if not self.db_type:
+            return query
+
+        if self.db_type == "postgresql":
+            # Convert ? placeholders to %s for PostgreSQL
+            return query.replace("?", "%s")
+        elif self.db_type == "sqlite":
+            # Convert %s placeholders to ? for SQLite
+            return query.replace("%s", "?")
+
+        return query
+
     def execute_query(self, query: str, params: tuple = None) -> Any:
         """Execute a query and return results"""
         if not self.connection:
             self.connect()
 
+        # Convert placeholders based on database type
+        converted_query = self._convert_query_placeholders(query)
+
         try:
             cursor = self.connection.cursor()
             if params:
-                cursor.execute(query, params)
+                cursor.execute(converted_query, params)
             else:
-                cursor.execute(query)
+                cursor.execute(converted_query)
 
-            if query.strip().upper().startswith("SELECT"):
-                return cursor.fetchall()
+            if converted_query.strip().upper().startswith("SELECT"):
+                results = cursor.fetchall()
+                # Convert results to list of dictionaries for consistent access
+                if results and hasattr(results[0], "keys"):
+                    # SQLite Row objects or psycopg2 RealDictRow
+                    return [dict(row) for row in results]
+                elif results and isinstance(results[0], (tuple, list)):
+                    # Raw tuples - convert using column names
+                    columns = [desc[0] for desc in cursor.description]
+                    return [dict(zip(columns, row)) for row in results]
+                return results
             else:
                 self.connection.commit()
                 return cursor.rowcount

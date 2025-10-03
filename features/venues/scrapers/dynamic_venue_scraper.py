@@ -93,7 +93,7 @@ def get_dynamic_venues_from_db() -> List[Dict]:
     logger.info("Getting dynamic venues from database (compatibility mode)")
 
     try:
-        from etl.utils import get_db_conn
+        from shared.database.connection import get_db_conn
 
         conn = get_db_conn()
         if not conn:

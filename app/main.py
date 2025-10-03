@@ -23,6 +23,8 @@ try:
         InteractiveMapBuilder,
     )
     from shared.database.connection import get_database_connection
+    from shared.orchestration.master_data_orchestrator import MasterDataOrchestrator
+    from fix_streamlit_event_discrepancy import refresh_master_data_tables
 
     # Use the available database connection function
     get_db_conn = get_database_connection
@@ -50,12 +52,28 @@ def main():
 
         # Data collection options
         st.subheader("Data Collection")
-        collect_venues = st.button("🏢 Collect Venue Data")
-        collect_events = st.button("🎭 Collect Event Data")
+        collect_venues = st.button("🏢 Collect Venue Data", key="collect_venues")
+        collect_events = st.button("🎭 Collect Event Data", key="collect_events")
+        collect_all_data = st.button("🚀 Collect All Data", key="collect_all_data")
+        collect_priority_data = st.button(
+            "🎯 Collect Priority Data", key="collect_priority_data"
+        )
 
         # Prediction options
         st.subheader("ML Predictions")
-        run_predictions = st.button("🤖 Generate Predictions")
+        run_predictions = st.button("🤖 Generate Predictions", key="run_predictions")
+
+        # Orchestrator options
+        st.subheader("Master Data Orchestrator")
+        show_health_report = st.button(
+            "📊 Show Health Report", key="show_health_report"
+        )
+
+        # Master data refresh
+        st.subheader("Data Management")
+        refresh_master_data = st.button(
+            "🔄 Refresh Master Data", key="refresh_master_data"
+        )
 
         # Map options
         st.subheader("Visualization")
@@ -91,6 +109,15 @@ def main():
         st.subheader("Recent Activity")
         display_recent_activity()
 
+    # Handle refresh master data
+    if refresh_master_data:
+        with st.spinner("Refreshing master data tables..."):
+            refresh_master_data_tables()
+            st.success(
+                "Master data refreshed! The map and counts should now be consistent."
+            )
+            st.rerun()
+
     # Handle button clicks
     if collect_venues:
         with st.spinner("Collecting venue data..."):
@@ -100,9 +127,21 @@ def main():
         with st.spinner("Collecting event data..."):
             collect_event_data()
 
+    if collect_all_data:
+        with st.spinner("Collecting all data sources..."):
+            collect_all_data_orchestrated()
+
+    if collect_priority_data:
+        with st.spinner("Collecting priority data sources..."):
+            collect_priority_data_orchestrated()
+
     if run_predictions:
         with st.spinner("Generating ML predictions..."):
             generate_predictions()
+
+    if show_health_report:
+        with st.spinner("Generating health report..."):
+            show_data_health_report()
 
 
 def create_map(map_type: str, start_date, end_date) -> Optional[folium.Map]:
@@ -194,19 +233,28 @@ def display_data_summary():
     """Display summary statistics"""
     try:
         with get_database_connection() as db:
-            venue_count = db.execute_query("SELECT COUNT(*) as count FROM venues")[0][
-                "count"
-            ]
-            event_count = db.execute_query("SELECT COUNT(*) as count FROM events")[0][
-                "count"
-            ]
+            # Use master data tables for consistency with map display
+            venue_count = db.execute_query(
+                "SELECT COUNT(*) as count FROM master_venue_data"
+            )[0]["count"]
+            event_count = db.execute_query(
+                "SELECT COUNT(*) as count FROM master_events_data"
+            )[0]["count"]
 
-            st.metric("Total Venues", venue_count)
-            st.metric("Total Events", event_count)
+            # Also show raw counts for comparison
+            raw_venue_count = db.execute_query("SELECT COUNT(*) as count FROM venues")[
+                0
+            ]["count"]
+            raw_event_count = db.execute_query("SELECT COUNT(*) as count FROM events")[
+                0
+            ]["count"]
+
+            st.metric("Mappable Venues", venue_count, delta=f"{raw_venue_count} total")
+            st.metric("Mappable Events", event_count, delta=f"{raw_event_count} total")
 
     except Exception as e:
-        st.metric("Total Venues", "N/A")
-        st.metric("Total Events", "N/A")
+        st.metric("Mappable Venues", "N/A")
+        st.metric("Mappable Events", "N/A")
 
 
 def display_recent_activity():
@@ -235,12 +283,36 @@ def collect_venue_data():
     """Collect venue data using venue collectors"""
     try:
         collector = VenueCollector()
-        result = collector.collect_all_venues()
+        results = collector.collect_all_venues()
 
-        if result.get("success"):
-            st.success(f"Collected {result.get('venues_collected', 0)} venues")
+        # Handle list of results from collect_all_venues
+        if isinstance(results, list):
+            successful_results = [r for r in results if r.success]
+            total_venues = sum(r.venues_collected for r in successful_results)
+            total_events = sum(r.events_collected for r in successful_results)
+
+            if successful_results:
+                st.success(
+                    f"Collected {total_venues} venues and {total_events} events from {len(successful_results)} sources"
+                )
+            else:
+                error_messages = [r.error_message for r in results if r.error_message]
+                st.error(
+                    f"Venue collection failed: {'; '.join(error_messages) if error_messages else 'Unknown error'}"
+                )
+
+        # Handle single result from collect_data
+        elif hasattr(results, "success"):
+            if results.success:
+                st.success(
+                    f"Collected {results.venues_collected} venues and {results.events_collected} events"
+                )
+            else:
+                st.error(
+                    f"Venue collection failed: {results.error_message or 'Unknown error'}"
+                )
         else:
-            st.error(f"Venue collection failed: {result.get('error', 'Unknown error')}")
+            st.error("Unexpected result format from venue collector")
 
     except Exception as e:
         st.error(f"Error collecting venues: {e}")
@@ -252,10 +324,24 @@ def collect_event_data():
         scraper = KCEventScraper()
         result = scraper.collect_data()
 
-        if result.get("success"):
-            st.success(f"Collected {result.get('events_collected', 0)} events")
+        # Handle dataclass result properly
+        if hasattr(result, "success"):
+            if result.success:
+                st.success(f"Collected {result.events_collected} events")
+            else:
+                st.error(
+                    f"Event collection failed: {result.error_message or 'Unknown error'}"
+                )
+        # Fallback for dictionary-style results
+        elif isinstance(result, dict):
+            if result.get("success"):
+                st.success(f"Collected {result.get('events_collected', 0)} events")
+            else:
+                st.error(
+                    f"Event collection failed: {result.get('error', 'Unknown error')}"
+                )
         else:
-            st.error(f"Event collection failed: {result.get('error', 'Unknown error')}")
+            st.error("Unexpected result format from event scraper")
 
     except Exception as e:
         st.error(f"Error collecting events: {e}")
@@ -274,6 +360,134 @@ def generate_predictions():
 
     except Exception as e:
         st.error(f"Error generating predictions: {e}")
+
+
+def collect_all_data_orchestrated():
+    """Collect all data using the Master Data Orchestrator"""
+    try:
+        orchestrator = MasterDataOrchestrator()
+        status = orchestrator.collect_all_data()
+
+        if status.health_score > 0.5:
+            st.success(
+                f"✅ Data collection completed!\n"
+                f"- Total venues: {status.total_venues}\n"
+                f"- Total events: {status.total_events}\n"
+                f"- Health score: {status.health_score:.2f}\n"
+                f"- Data completeness: {status.data_completeness:.1%}"
+            )
+        else:
+            st.warning(
+                f"⚠️ Data collection completed with issues:\n"
+                f"- Health score: {status.health_score:.2f}\n"
+                f"- Data completeness: {status.data_completeness:.1%}"
+            )
+
+        # Show individual collection results
+        with st.expander("Collection Details"):
+            for result in status.collection_results:
+                status_icon = "✅" if result.success else "❌"
+                st.write(
+                    f"{status_icon} **{result.source_name}**: "
+                    f"{result.venues_collected} items in {result.duration_seconds:.1f}s"
+                )
+                if result.error_message:
+                    st.error(f"Error: {result.error_message}")
+
+    except Exception as e:
+        st.error(f"Error in orchestrated data collection: {e}")
+
+
+def collect_priority_data_orchestrated():
+    """Collect priority data using the Master Data Orchestrator"""
+    try:
+        orchestrator = MasterDataOrchestrator()
+        results = orchestrator.collect_priority_data()
+
+        successful_results = [r for r in results if r.success]
+        total_items = sum(r.venues_collected for r in successful_results)
+
+        if successful_results:
+            st.success(
+                f"✅ Priority data collection completed!\n"
+                f"- Sources processed: {len(successful_results)}/{len(results)}\n"
+                f"- Total items collected: {total_items}"
+            )
+        else:
+            st.error("❌ Priority data collection failed")
+
+        # Show individual results
+        with st.expander("Priority Collection Details"):
+            for result in results:
+                status_icon = "✅" if result.success else "❌"
+                st.write(
+                    f"{status_icon} **{result.source_name}**: "
+                    f"{result.venues_collected} items in {result.duration_seconds:.1f}s"
+                )
+                if result.error_message:
+                    st.error(f"Error: {result.error_message}")
+
+    except Exception as e:
+        st.error(f"Error in priority data collection: {e}")
+
+
+def show_data_health_report():
+    """Show comprehensive data health report"""
+    try:
+        orchestrator = MasterDataOrchestrator()
+        health_report = orchestrator.get_data_health_report()
+
+        if "error" in health_report:
+            st.error(f"Error generating health report: {health_report['error']}")
+            return
+
+        # Overall health score
+        health_score = health_report.get("overall_health_score", 0)
+        if health_score >= 0.8:
+            st.success(f"🟢 System Health: Excellent ({health_score:.1%})")
+        elif health_score >= 0.6:
+            st.warning(f"🟡 System Health: Good ({health_score:.1%})")
+        else:
+            st.error(f"🔴 System Health: Needs Attention ({health_score:.1%})")
+
+        # Venue statistics
+        venue_stats = health_report.get("venue_statistics", {})
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric(
+                "Total Venues",
+                venue_stats.get("total_venues", 0),
+            )
+
+        with col2:
+            st.metric(
+                "Geocoded Venues",
+                venue_stats.get("geocoded_venues", 0),
+                delta=f"{venue_stats.get('geocoding_completeness', 0):.1%} complete",
+            )
+
+        with col3:
+            st.metric(
+                "Psychographic Data",
+                venue_stats.get("venues_with_psychographic", 0),
+                delta=f"{venue_stats.get('psychographic_completeness', 0):.1%} complete",
+            )
+
+        # Event statistics
+        event_stats = health_report.get("event_statistics", {})
+        st.metric("Total Events", event_stats.get("total_events", 0))
+
+        # Recent collections
+        recent_collections = health_report.get("recent_collections", 0)
+        st.metric("Recent Collections", recent_collections)
+
+        # Detailed breakdown
+        with st.expander("Detailed Health Metrics"):
+            st.json(health_report)
+
+    except Exception as e:
+        st.error(f"Error showing health report: {e}")
 
 
 if __name__ == "__main__":

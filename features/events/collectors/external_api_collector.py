@@ -15,8 +15,8 @@ from dataclasses import dataclass
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
-    from etl.utils import get_db_conn
-    from master_data_service.quality_controller import QualityController
+    from shared.database.connection import get_db_conn
+    from shared.data_quality.quality_controller import QualityController
 except ImportError as e:
     logging.warning(f"Could not import some modules: {e}")
 

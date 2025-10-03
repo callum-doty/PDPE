@@ -1,7 +1,7 @@
 # Master Data Orchestrator
 """
 Central orchestrator for all data collection and aggregation processes.
-Coordinates existing ETL scripts into a unified data collection system.
+Coordinates existing data collection components into a unified data collection system.
 """
 
 import sys
@@ -11,47 +11,52 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add project root to path for imports
+project_root = Path(__file__).resolve().parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
-# Import existing ETL modules
+# Import unified models
+from shared.models.core_models import (
+    VenueCollectionResult,
+    EventCollectionResult,
+    DataQualityMetrics,
+    ProcessingStatus,
+)
+
+# Import application components
 try:
-    from etl.ingest_local_venues import scrape_all_local_venues
-    from etl.ingest_dynamic_venues import ingest_dynamic_venue_data
-    from etl.ingest_social import ingest_social_data_for_venues
-    from etl.ingest_weather import fetch_weather_for_kansas_city, upsert_weather_to_db
-    from etl.ingest_traffic import ingest_traffic_data
-    from etl.ingest_foot_traffic import ingest_foot_traffic_data
-    from etl.ingest_econ import ingest_economic_data
-    from etl.utils import get_db_conn
+    from features.venues.collectors.venue_collector import VenueCollector
+    from features.venues.scrapers.kc_event_scraper import KCEventScraper
+    from features.ml.models.inference.predictor import MLPredictor
+    from shared.database.connection import get_database_connection
+    from shared.data_quality.quality_controller import QualityController
+
+    COMPONENTS_AVAILABLE = True
 except ImportError as e:
-    logging.warning(f"Could not import some ETL modules: {e}")
+    logging.warning(f"Could not import some application components: {e}")
+    COMPONENTS_AVAILABLE = False
 
-# Import ML prediction function separately since it might not exist
-try:
-    from backend.models.serve import generate_predictions_for_venues
+    # Create fallback classes
+    class VenueCollector:
+        def collect_all_venues(self):
+            return []
 
-    HAS_ML_PREDICTIONS = True
-except ImportError:
-    HAS_ML_PREDICTIONS = False
-    logging.warning("ML prediction module not available")
+    class KCEventScraper:
+        def collect_data(self):
+            return VenueCollectionResult(
+                "events", False, 0, 0.0, error_message="Component not available"
+            )
 
-    def generate_predictions_for_venues():
-        """Placeholder function when ML predictions are not available"""
-        logging.info("ML predictions not available - skipping")
+    class MLPredictor:
+        def generate_venue_predictions(self):
+            return []
+
+    def get_database_connection():
+        return None
+
+    class QualityController:
         pass
-
-
-@dataclass
-class DataCollectionResult:
-    """Result of a data collection operation"""
-
-    source_name: str
-    success: bool
-    records_collected: int
-    duration_seconds: float
-    error_message: Optional[str] = None
-    data_quality_score: Optional[float] = None
 
 
 @dataclass
@@ -60,8 +65,9 @@ class MasterDataStatus:
 
     last_refresh: datetime
     total_venues: int
+    total_events: int
     data_completeness: float
-    collection_results: List[DataCollectionResult]
+    collection_results: List[VenueCollectionResult]
     health_score: float
 
 
@@ -69,20 +75,26 @@ class MasterDataOrchestrator:
     """
     Master orchestrator that coordinates all data collection processes.
 
-    This class serves as the single point of control for all ETL operations,
-    replacing the scattered approach with a unified data collection system.
+    This class serves as the single point of control for all data collection operations,
+    integrating with the new application architecture and components.
     """
 
     def __init__(self):
         """Initialize the master data orchestrator."""
         self.logger = logging.getLogger(__name__)
         self.collection_results = []
+        self.quality_controller = QualityController()
+
+        # Initialize collectors
+        self.venue_collector = VenueCollector()
+        self.event_scraper = KCEventScraper()
+        self.ml_predictor = MLPredictor()
 
         # Kansas City area bounds for data collection
         self.kc_bounds = {"north": 39.3, "south": 38.9, "east": -94.3, "west": -94.8}
 
         # Priority data sources (based on user requirements)
-        self.priority_sources = ["venues", "social_sentiment", "ml_predictions"]
+        self.priority_sources = ["venues", "events", "ml_predictions"]
         self.secondary_sources = ["weather", "traffic", "foot_traffic", "economic"]
 
     def collect_all_data(
@@ -115,7 +127,7 @@ class MasterDataOrchestrator:
         self.logger.info("📊 Phase 1: Collecting priority data sources")
         self._collect_priority_data()
 
-        # Phase 2: Collect secondary data sources
+        # Phase 2: Collect secondary data sources (if available)
         self.logger.info("📈 Phase 2: Collecting secondary data sources")
         self._collect_secondary_data()
 
@@ -134,9 +146,9 @@ class MasterDataOrchestrator:
 
         return status
 
-    def collect_priority_data(self) -> List[DataCollectionResult]:
+    def collect_priority_data(self) -> List[VenueCollectionResult]:
         """
-        Collect only priority data sources (venues, social, ML).
+        Collect only priority data sources (venues, events, ML).
 
         Returns:
             List of collection results for priority sources
@@ -153,7 +165,7 @@ class MasterDataOrchestrator:
 
     def refresh_data_sources(
         self, sources: Optional[List[str]] = None
-    ) -> List[DataCollectionResult]:
+    ) -> List[VenueCollectionResult]:
         """
         Refresh specific data sources.
 
@@ -171,18 +183,16 @@ class MasterDataOrchestrator:
         for source in sources:
             if source == "venues":
                 self._collect_venue_data()
-            elif source == "social_sentiment":
-                self._collect_social_data()
-            elif source == "weather":
-                self._collect_weather_data()
-            elif source == "traffic":
-                self._collect_traffic_data()
-            elif source == "foot_traffic":
-                self._collect_foot_traffic_data()
-            elif source == "economic":
-                self._collect_economic_data()
+            elif source == "events":
+                self._collect_event_data()
             elif source == "ml_predictions":
                 self._generate_ml_predictions()
+            elif source == "master_data":
+                self._refresh_master_data_views()
+            elif source in self.secondary_sources:
+                self.logger.info(
+                    f"Secondary source {source} not yet implemented in new architecture"
+                )
             else:
                 self.logger.warning(f"Unknown data source: {source}")
 
@@ -195,368 +205,300 @@ class MasterDataOrchestrator:
         Returns:
             Dictionary containing health metrics
         """
-        conn = get_db_conn()
-        if not conn:
-            return {"error": "Could not connect to database"}
-
-        cur = conn.cursor()
-
         try:
-            # Get venue count and data completeness
-            cur.execute(
+            with get_database_connection() as db:
+                # Get venue count and data completeness
+                venue_stats = db.execute_query(
+                    """
+                    SELECT 
+                        COUNT(*) as total_venues,
+                        COUNT(CASE WHEN lat IS NOT NULL AND lng IS NOT NULL THEN 1 END) as geocoded_venues,
+                        COUNT(CASE WHEN psychographic_relevance IS NOT NULL THEN 1 END) as venues_with_psychographic
+                    FROM venues
                 """
-                SELECT 
-                    COUNT(*) as total_venues,
-                    COUNT(CASE WHEN lat IS NOT NULL AND lng IS NOT NULL THEN 1 END) as geocoded_venues,
-                    COUNT(CASE WHEN psychographic_relevance IS NOT NULL THEN 1 END) as venues_with_psychographic
-                FROM venues
-            """
-            )
-            venue_stats = cur.fetchone()
-
-            # Get recent data collection status
-            cur.execute(
-                """
-                SELECT source_name, last_successful_collection, collection_health_score
-                FROM collection_status
-                ORDER BY last_successful_collection DESC
-            """
-            )
-            collection_status = cur.fetchall()
-
-            # Calculate overall health score
-            total_venues = venue_stats[0] if venue_stats[0] else 0
-            geocoded_venues = venue_stats[1] if venue_stats[1] else 0
-            psychographic_venues = venue_stats[2] if venue_stats[2] else 0
-
-            geocoding_completeness = geocoded_venues / max(total_venues, 1)
-            psychographic_completeness = psychographic_venues / max(total_venues, 1)
-
-            health_report = {
-                "timestamp": datetime.now().isoformat(),
-                "venue_statistics": {
-                    "total_venues": total_venues,
-                    "geocoded_venues": geocoded_venues,
-                    "venues_with_psychographic": psychographic_venues,
-                    "geocoding_completeness": geocoding_completeness,
-                    "psychographic_completeness": psychographic_completeness,
-                },
-                "data_sources": {
-                    status[0]: {
-                        "last_collection": status[1].isoformat() if status[1] else None,
-                        "health_score": status[2] if status[2] else 0.0,
-                    }
-                    for status in collection_status
-                },
-                "overall_health_score": (
-                    geocoding_completeness + psychographic_completeness
                 )
-                / 2,
-                "recent_collections": len(
-                    [
-                        s
-                        for s in collection_status
-                        if s[1] and s[1] > datetime.now() - timedelta(days=1)
-                    ]
-                ),
-            }
 
-            return health_report
+                # Get event count
+                event_stats = db.execute_query(
+                    "SELECT COUNT(*) as total_events FROM events"
+                )
+
+                # Calculate health metrics
+                total_venues = venue_stats[0]["total_venues"] if venue_stats else 0
+                geocoded_venues = (
+                    venue_stats[0]["geocoded_venues"] if venue_stats else 0
+                )
+                psychographic_venues = (
+                    venue_stats[0]["venues_with_psychographic"] if venue_stats else 0
+                )
+                total_events = event_stats[0]["total_events"] if event_stats else 0
+
+                geocoding_completeness = geocoded_venues / max(total_venues, 1)
+                psychographic_completeness = psychographic_venues / max(total_venues, 1)
+
+                health_report = {
+                    "timestamp": datetime.now().isoformat(),
+                    "venue_statistics": {
+                        "total_venues": total_venues,
+                        "geocoded_venues": geocoded_venues,
+                        "venues_with_psychographic": psychographic_venues,
+                        "geocoding_completeness": geocoding_completeness,
+                        "psychographic_completeness": psychographic_completeness,
+                    },
+                    "event_statistics": {
+                        "total_events": total_events,
+                    },
+                    "overall_health_score": (
+                        geocoding_completeness + psychographic_completeness
+                    )
+                    / 2,
+                    "recent_collections": len(self.collection_results),
+                }
+
+                return health_report
 
         except Exception as e:
             self.logger.error(f"Error generating health report: {e}")
             return {"error": str(e)}
-        finally:
-            cur.close()
-            conn.close()
 
     def _collect_priority_data(self):
-        """Collect priority data sources: venues and social sentiment."""
+        """Collect priority data sources: venues, events, and ML predictions."""
         self._collect_venue_data()
-        self._collect_social_data()
+        self._collect_event_data()
 
     def _collect_secondary_data(self):
         """Collect secondary data sources: weather, traffic, etc."""
-        self._collect_weather_data()
-        self._collect_traffic_data()
-        self._collect_foot_traffic_data()
-        self._collect_economic_data()
+        # These would be implemented as additional collectors in the future
+        self.logger.info(
+            "Secondary data sources not yet implemented in new architecture"
+        )
+        pass
 
     def _collect_venue_data(self):
-        """Collect venue data from all sources."""
+        """Collect venue data using the VenueCollector."""
         start_time = datetime.now()
 
         try:
-            self.logger.info("🏢 Collecting venue data (local + dynamic)")
+            self.logger.info("🏢 Collecting venue data")
 
-            # Collect local venues (your 29 KC venues)
-            scrape_all_local_venues()
+            # Use the VenueCollector to collect all venues
+            results = self.venue_collector.collect_all_venues()
 
-            # Collect dynamic venues
-            ingest_dynamic_venue_data()
+            # Handle different result formats
+            if isinstance(results, list):
+                # Multiple results from different sources
+                total_venues = sum(r.venues_collected for r in results if r.success)
+                total_events = sum(
+                    getattr(r, "events_collected", 0) for r in results if r.success
+                )
+                successful_sources = len([r for r in results if r.success])
 
-            duration = (datetime.now() - start_time).total_seconds()
+                duration = (datetime.now() - start_time).total_seconds()
 
-            # Get count of venues collected
-            conn = get_db_conn()
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT COUNT(*) FROM venues WHERE updated_at >= %s", (start_time,)
-            )
-            venues_count = cur.fetchone()[0] if cur.fetchone() else 0
-            cur.close()
-            conn.close()
+                # Create consolidated result
+                result = VenueCollectionResult(
+                    source_name="venues",
+                    success=successful_sources > 0,
+                    venues_collected=total_venues,
+                    duration_seconds=duration,
+                    data_quality_score=0.8 if successful_sources > 0 else 0.0,
+                )
 
-            result = DataCollectionResult(
-                source_name="venues",
-                success=True,
-                records_collected=venues_count,
-                duration_seconds=duration,
-                data_quality_score=0.9,  # High quality for venue data
-            )
+                # Add individual results to collection_results
+                self.collection_results.extend(results)
 
-            self.collection_results.append(result)
-            self.logger.info(
-                f"✅ Venue collection completed: {venues_count} venues in {duration:.1f}s"
-            )
+            else:
+                # Single result
+                result = results
+                self.collection_results.append(result)
+
+            if result.success:
+                self.logger.info(
+                    f"✅ Venue collection completed: {result.venues_collected} venues in {result.duration_seconds:.1f}s"
+                )
+            else:
+                self.logger.error(f"❌ Venue collection failed: {result.error_message}")
 
         except Exception as e:
             duration = (datetime.now() - start_time).total_seconds()
-            result = DataCollectionResult(
+            result = VenueCollectionResult(
                 source_name="venues",
                 success=False,
-                records_collected=0,
+                venues_collected=0,
                 duration_seconds=duration,
                 error_message=str(e),
             )
             self.collection_results.append(result)
             self.logger.error(f"❌ Venue collection failed: {e}")
 
-    def _collect_social_data(self):
-        """Collect social sentiment data."""
+    def _collect_event_data(self):
+        """Collect event data using the KCEventScraper."""
         start_time = datetime.now()
 
         try:
-            self.logger.info("📱 Collecting social sentiment data")
+            self.logger.info("🎭 Collecting event data")
 
-            # Use existing social sentiment ingestion
-            ingest_social_data_for_venues()
+            # Use the KCEventScraper to collect events
+            result = self.event_scraper.collect_data()
 
-            duration = (datetime.now() - start_time).total_seconds()
+            # Convert to VenueCollectionResult format for consistency
+            if hasattr(result, "success"):
+                venue_result = VenueCollectionResult(
+                    source_name="events",
+                    success=result.success,
+                    venues_collected=0,  # Events don't count as venues
+                    duration_seconds=(
+                        result.duration_seconds
+                        if hasattr(result, "duration_seconds")
+                        else (datetime.now() - start_time).total_seconds()
+                    ),
+                    error_message=(
+                        result.error_message
+                        if hasattr(result, "error_message")
+                        else None
+                    ),
+                    data_quality_score=(
+                        result.data_quality_score
+                        if hasattr(result, "data_quality_score")
+                        else 0.7
+                    ),
+                )
+            else:
+                # Fallback for unexpected result format
+                venue_result = VenueCollectionResult(
+                    source_name="events",
+                    success=False,
+                    venues_collected=0,
+                    duration_seconds=(datetime.now() - start_time).total_seconds(),
+                    error_message="Unexpected result format",
+                )
 
-            result = DataCollectionResult(
-                source_name="social_sentiment",
-                success=True,
-                records_collected=0,  # Would need to track this in the function
-                duration_seconds=duration,
-                data_quality_score=0.7,
-            )
+            self.collection_results.append(venue_result)
 
-            self.collection_results.append(result)
-            self.logger.info(
-                f"✅ Social sentiment collection completed in {duration:.1f}s"
-            )
+            if venue_result.success:
+                events_collected = getattr(result, "events_collected", 0)
+                self.logger.info(
+                    f"✅ Event collection completed: {events_collected} events in {venue_result.duration_seconds:.1f}s"
+                )
+            else:
+                self.logger.error(
+                    f"❌ Event collection failed: {venue_result.error_message}"
+                )
 
         except Exception as e:
             duration = (datetime.now() - start_time).total_seconds()
-            result = DataCollectionResult(
-                source_name="social_sentiment",
+            result = VenueCollectionResult(
+                source_name="events",
                 success=False,
-                records_collected=0,
+                venues_collected=0,
                 duration_seconds=duration,
                 error_message=str(e),
             )
             self.collection_results.append(result)
-            self.logger.error(f"❌ Social sentiment collection failed: {e}")
-
-    def _collect_weather_data(self):
-        """Collect weather data."""
-        start_time = datetime.now()
-
-        try:
-            self.logger.info("🌤️ Collecting weather data")
-
-            weather_records = fetch_weather_for_kansas_city()
-            if weather_records:
-                upsert_weather_to_db(weather_records)
-
-            duration = (datetime.now() - start_time).total_seconds()
-
-            result = DataCollectionResult(
-                source_name="weather",
-                success=True,
-                records_collected=len(weather_records) if weather_records else 0,
-                duration_seconds=duration,
-                data_quality_score=0.8,
-            )
-
-            self.collection_results.append(result)
-            self.logger.info(
-                f"✅ Weather collection completed: {len(weather_records) if weather_records else 0} records in {duration:.1f}s"
-            )
-
-        except Exception as e:
-            duration = (datetime.now() - start_time).total_seconds()
-            result = DataCollectionResult(
-                source_name="weather",
-                success=False,
-                records_collected=0,
-                duration_seconds=duration,
-                error_message=str(e),
-            )
-            self.collection_results.append(result)
-            self.logger.error(f"❌ Weather collection failed: {e}")
-
-    def _collect_traffic_data(self):
-        """Collect traffic data."""
-        start_time = datetime.now()
-
-        try:
-            self.logger.info("🚗 Collecting traffic data")
-
-            ingest_traffic_data()
-
-            duration = (datetime.now() - start_time).total_seconds()
-
-            result = DataCollectionResult(
-                source_name="traffic",
-                success=True,
-                records_collected=0,  # Would need to track this
-                duration_seconds=duration,
-                data_quality_score=0.7,
-            )
-
-            self.collection_results.append(result)
-            self.logger.info(f"✅ Traffic collection completed in {duration:.1f}s")
-
-        except Exception as e:
-            duration = (datetime.now() - start_time).total_seconds()
-            result = DataCollectionResult(
-                source_name="traffic",
-                success=False,
-                records_collected=0,
-                duration_seconds=duration,
-                error_message=str(e),
-            )
-            self.collection_results.append(result)
-            self.logger.error(f"❌ Traffic collection failed: {e}")
-
-    def _collect_foot_traffic_data(self):
-        """Collect foot traffic data."""
-        start_time = datetime.now()
-
-        try:
-            self.logger.info("👥 Collecting foot traffic data")
-
-            ingest_foot_traffic_data()
-
-            duration = (datetime.now() - start_time).total_seconds()
-
-            result = DataCollectionResult(
-                source_name="foot_traffic",
-                success=True,
-                records_collected=0,
-                duration_seconds=duration,
-                data_quality_score=0.6,
-            )
-
-            self.collection_results.append(result)
-            self.logger.info(f"✅ Foot traffic collection completed in {duration:.1f}s")
-
-        except Exception as e:
-            duration = (datetime.now() - start_time).total_seconds()
-            result = DataCollectionResult(
-                source_name="foot_traffic",
-                success=False,
-                records_collected=0,
-                duration_seconds=duration,
-                error_message=str(e),
-            )
-            self.collection_results.append(result)
-            self.logger.error(f"❌ Foot traffic collection failed: {e}")
-
-    def _collect_economic_data(self):
-        """Collect economic data."""
-        start_time = datetime.now()
-
-        try:
-            self.logger.info("💰 Collecting economic data")
-
-            ingest_economic_data()
-
-            duration = (datetime.now() - start_time).total_seconds()
-
-            result = DataCollectionResult(
-                source_name="economic",
-                success=True,
-                records_collected=0,
-                duration_seconds=duration,
-                data_quality_score=0.8,
-            )
-
-            self.collection_results.append(result)
-            self.logger.info(
-                f"✅ Economic data collection completed in {duration:.1f}s"
-            )
-
-        except Exception as e:
-            duration = (datetime.now() - start_time).total_seconds()
-            result = DataCollectionResult(
-                source_name="economic",
-                success=False,
-                records_collected=0,
-                duration_seconds=duration,
-                error_message=str(e),
-            )
-            self.collection_results.append(result)
-            self.logger.error(f"❌ Economic data collection failed: {e}")
+            self.logger.error(f"❌ Event collection failed: {e}")
 
     def _generate_ml_predictions(self):
-        """Generate ML predictions for venues."""
+        """Generate ML predictions using the MLPredictor."""
         start_time = datetime.now()
 
         try:
             self.logger.info("🤖 Generating ML predictions")
 
-            # Generate predictions for all venues
-            generate_predictions_for_venues()
+            # Use the MLPredictor to generate predictions
+            predictions = self.ml_predictor.generate_venue_predictions()
 
             duration = (datetime.now() - start_time).total_seconds()
 
-            result = DataCollectionResult(
+            result = VenueCollectionResult(
                 source_name="ml_predictions",
-                success=True,
-                records_collected=0,  # Would need to track this
+                success=len(predictions) > 0 if predictions else False,
+                venues_collected=len(predictions) if predictions else 0,
                 duration_seconds=duration,
-                data_quality_score=0.8,
+                data_quality_score=0.8 if predictions else 0.0,
             )
 
             self.collection_results.append(result)
-            self.logger.info(f"✅ ML predictions completed in {duration:.1f}s")
+
+            if result.success:
+                self.logger.info(
+                    f"✅ ML predictions completed: {len(predictions)} predictions in {duration:.1f}s"
+                )
+            else:
+                self.logger.warning("⚠️ No ML predictions generated")
 
         except Exception as e:
             duration = (datetime.now() - start_time).total_seconds()
-            result = DataCollectionResult(
+            result = VenueCollectionResult(
                 source_name="ml_predictions",
                 success=False,
-                records_collected=0,
+                venues_collected=0,
                 duration_seconds=duration,
                 error_message=str(e),
             )
             self.collection_results.append(result)
             self.logger.error(f"❌ ML predictions failed: {e}")
 
+    def _refresh_master_data_views(self):
+        """Refresh master data materialized views using the proper method for the database type."""
+        start_time = datetime.now()
+
+        try:
+            self.logger.info("🔄 Refreshing master data views")
+
+            # Import the refresh function from the fix module
+            from fix_streamlit_event_discrepancy import refresh_master_data_tables
+
+            # Use the updated refresh function that handles both PostgreSQL and SQLite
+            venue_count, event_count = refresh_master_data_tables()
+
+            duration = (datetime.now() - start_time).total_seconds()
+
+            result = VenueCollectionResult(
+                source_name="master_data",
+                success=venue_count > 0 or event_count > 0,
+                venues_collected=venue_count,
+                duration_seconds=duration,
+                data_quality_score=0.9 if venue_count > 0 else 0.0,
+            )
+
+            self.collection_results.append(result)
+
+            if result.success:
+                self.logger.info(
+                    f"✅ Master data refresh completed: {venue_count} venues, {event_count} events in {duration:.1f}s"
+                )
+            else:
+                self.logger.warning("⚠️ Master data refresh returned no data")
+
+        except Exception as e:
+            duration = (datetime.now() - start_time).total_seconds()
+            result = VenueCollectionResult(
+                source_name="master_data",
+                success=False,
+                venues_collected=0,
+                duration_seconds=duration,
+                error_message=str(e),
+            )
+            self.collection_results.append(result)
+            self.logger.error(f"❌ Master data refresh failed: {e}")
+
     def _calculate_master_status(self) -> MasterDataStatus:
         """Calculate overall master data status."""
-        # Get venue count
-        conn = get_db_conn()
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT COUNT(*) FROM venues WHERE lat IS NOT NULL AND lng IS NOT NULL"
-        )
-        total_venues = cur.fetchone()[0] if cur.fetchone() else 0
-        cur.close()
-        conn.close()
+        try:
+            # Get venue and event counts from database
+            with get_database_connection() as db:
+                venue_stats = db.execute_query(
+                    "SELECT COUNT(*) as count FROM venues WHERE lat IS NOT NULL AND lng IS NOT NULL"
+                )
+                event_stats = db.execute_query("SELECT COUNT(*) as count FROM events")
+
+                total_venues = venue_stats[0]["count"] if venue_stats else 0
+                total_events = event_stats[0]["count"] if event_stats else 0
+
+        except Exception as e:
+            self.logger.warning(f"Could not get database counts: {e}")
+            total_venues = 0
+            total_events = 0
 
         # Calculate data completeness
         successful_collections = len([r for r in self.collection_results if r.success])
@@ -577,6 +519,7 @@ class MasterDataOrchestrator:
         return MasterDataStatus(
             last_refresh=datetime.now(),
             total_venues=total_venues,
+            total_events=total_events,
             data_completeness=data_completeness,
             collection_results=self.collection_results,
             health_score=health_score,
@@ -609,7 +552,7 @@ if __name__ == "__main__":
     for result in results:
         status = "✅" if result.success else "❌"
         print(
-            f"{status} {result.source_name}: {result.records_collected} records in {result.duration_seconds:.1f}s"
+            f"{status} {result.source_name}: {result.venues_collected} records in {result.duration_seconds:.1f}s"
         )
 
     # Test health report

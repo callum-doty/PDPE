@@ -36,7 +36,7 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 try:
-    from shared.database.connection import get_db_conn
+    from shared.database.connection import get_database_connection
     from shared.data_quality.quality_controller import QualityController
     from features.venues.processors.venue_processing import (
         process_venues_with_quality_checks,
@@ -56,7 +56,7 @@ except ImportError as e:
     logging.warning(f"Could not import some modules: {e}")
 
     # Fallback implementations
-    def get_db_conn():
+    def get_database_connection():
         """Fallback database connection"""
         return None
 
@@ -350,11 +350,17 @@ class UnifiedVenueCollector:
 
         # Process venues through quality pipeline
         if venues_to_process:
+            # Convert VenueData objects to dictionaries for processing
+            venue_dicts = [
+                self._venue_data_to_dict(venue) for venue in venues_to_process
+            ]
             processed_venues, venue_quality_report = process_venues_with_quality_checks(
-                venues_to_process
+                venue_dicts
             )
             if processed_venues:
-                self._upsert_venues_to_db(processed_venues)
+                self._upsert_venues_to_db(
+                    venues_to_process
+                )  # Use original VenueData objects for DB
                 log_venue_quality_metrics(venue_quality_report, "static_venues")
 
         # Store events by category
@@ -845,6 +851,30 @@ class UnifiedVenueCollector:
             self.logger.error(f"Error creating venue data from config: {e}")
             return None
 
+    def _venue_data_to_dict(self, venue_data: VenueData) -> Dict:
+        """Convert VenueData dataclass to dictionary for processing."""
+        return {
+            "external_id": venue_data.external_id,
+            "provider": venue_data.provider,
+            "name": venue_data.name,
+            "description": venue_data.description,
+            "category": venue_data.category,
+            "subcategory": venue_data.subcategory,
+            "website": venue_data.website,
+            "address": venue_data.address,
+            "phone": venue_data.phone,
+            "lat": venue_data.lat,
+            "lng": venue_data.lng,
+            "location": (
+                {"lat": venue_data.lat, "lng": venue_data.lng}
+                if venue_data.lat and venue_data.lng
+                else None
+            ),
+            "psychographic_scores": venue_data.psychographic_scores,
+            "scraped_at": venue_data.scraped_at,
+            "source_type": venue_data.source_type,
+        }
+
     # Helper methods
     def _safe_scrape_request(
         self, url: str, timeout: int = 10
@@ -1077,102 +1107,89 @@ class UnifiedVenueCollector:
         if not venues:
             return
 
-        conn = get_db_conn()
-        if not conn:
-            self.logger.error("Could not connect to database")
-            return
-
-        cur = conn.cursor()
-
         try:
-            for venue in venues:
-                # Check if venue already exists
-                cur.execute(
-                    """
-                    SELECT venue_id FROM venues 
-                    WHERE external_id = %s AND provider = %s
-                """,
-                    (venue.external_id, venue.provider),
-                )
-
-                existing_venue = cur.fetchone()
-
-                if existing_venue:
-                    # Update existing venue
-                    cur.execute(
+            with get_database_connection() as db:
+                for venue in venues:
+                    # Check if venue already exists
+                    existing_venues = db.execute_query(
                         """
-                        UPDATE venues SET
-                            name = %s,
-                            description = %s,
-                            category = %s,
-                            subcategory = %s,
-                            lat = %s,
-                            lng = %s,
-                            address = %s,
-                            phone = %s,
-                            website = %s,
-                            psychographic_relevance = %s,
-                            updated_at = NOW()
-                        WHERE venue_id = %s
+                        SELECT venue_id FROM venues 
+                        WHERE external_id = ? AND provider = ?
                     """,
-                        (
-                            venue.name,
-                            venue.description,
-                            venue.category,
-                            venue.subcategory,
-                            venue.lat,
-                            venue.lng,
-                            venue.address,
-                            venue.phone,
-                            venue.website,
-                            (
-                                json.dumps(venue.psychographic_scores)
-                                if venue.psychographic_scores
-                                else None
-                            ),
-                            existing_venue[0],
-                        ),
+                        (venue.external_id, venue.provider),
                     )
-                else:
-                    # Insert new venue
-                    cur.execute(
-                        """
-                        INSERT INTO venues (
-                            external_id, provider, name, description, category, subcategory,
-                            lat, lng, address, phone, website, psychographic_relevance
-                        ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+
+                    if existing_venues:
+                        # Update existing venue
+                        db.execute_query(
+                            """
+                            UPDATE venues SET
+                                name = ?,
+                                description = ?,
+                                category = ?,
+                                subcategory = ?,
+                                lat = ?,
+                                lng = ?,
+                                address = ?,
+                                phone = ?,
+                                website = ?,
+                                psychographic_relevance = ?,
+                                updated_at = datetime('now')
+                            WHERE venue_id = ?
+                        """,
+                            (
+                                venue.name,
+                                venue.description,
+                                venue.category,
+                                venue.subcategory,
+                                venue.lat,
+                                venue.lng,
+                                venue.address,
+                                venue.phone,
+                                venue.website,
+                                (
+                                    json.dumps(venue.psychographic_scores)
+                                    if venue.psychographic_scores
+                                    else None
+                                ),
+                                existing_venues[0]["venue_id"],
+                            ),
                         )
-                    """,
-                        (
-                            venue.external_id,
-                            venue.provider,
-                            venue.name,
-                            venue.description,
-                            venue.category,
-                            venue.subcategory,
-                            venue.lat,
-                            venue.lng,
-                            venue.address,
-                            venue.phone,
-                            venue.website,
+                    else:
+                        # Insert new venue
+                        db.execute_query(
+                            """
+                            INSERT INTO venues (
+                                external_id, provider, name, description, category, subcategory,
+                                lat, lng, address, phone, website, psychographic_relevance
+                            ) VALUES (
+                                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                            )
+                        """,
                             (
-                                json.dumps(venue.psychographic_scores)
-                                if venue.psychographic_scores
-                                else None
+                                venue.external_id,
+                                venue.provider,
+                                venue.name,
+                                venue.description,
+                                venue.category,
+                                venue.subcategory,
+                                venue.lat,
+                                venue.lng,
+                                venue.address,
+                                venue.phone,
+                                venue.website,
+                                (
+                                    json.dumps(venue.psychographic_scores)
+                                    if venue.psychographic_scores
+                                    else None
+                                ),
                             ),
-                        ),
-                    )
+                        )
 
-            conn.commit()
             self.logger.info(f"Successfully upserted {len(venues)} venues to database")
 
         except Exception as e:
             self.logger.error(f"Error upserting venues to database: {e}")
-            conn.rollback()
-        finally:
-            cur.close()
-            conn.close()
 
     def _upsert_events_to_db(
         self, events: List[Dict], venue_category: str = "local_venue"
@@ -1181,7 +1198,7 @@ class UnifiedVenueCollector:
         if not events:
             return
 
-        conn = get_db_conn()
+        conn = get_database_connection()
         if not conn:
             self.logger.error("Could not connect to database")
             return
@@ -1283,7 +1300,7 @@ class UnifiedVenueCollector:
         self, venue_name: str, provider: str, category: str = "local_venue"
     ) -> Optional[str]:
         """Find existing venue or create a new one."""
-        conn = get_db_conn()
+        conn = get_database_connection()
         if not conn:
             return None
 

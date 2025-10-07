@@ -10,7 +10,7 @@ import sqlite3
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from shared.database.connection import get_database_connection
+from core.database.connection import get_database_connection
 
 
 def create_sqlite_schema():

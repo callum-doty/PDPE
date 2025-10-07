@@ -651,7 +651,9 @@ class MapService:
         if not lat or not lng:
             return
 
-        score = venue.get("avg_rating", 3.0) / 5.0  # Normalize rating to 0-1
+        # Safe rating normalization with None check
+        rating = venue.get("avg_rating") or 3.0
+        score = rating / 5.0 if rating is not None else 0.6  # Normalize rating to 0-1
         radius, color, fill_color = self._get_marker_style(score, color_scheme)
 
         popup_content = f"""
@@ -761,19 +763,37 @@ class MapService:
 
         # Prepare heatmap data
         heat_data = []
-        max_value = (
-            max([p.get("prediction_value", 0) for p in predictions])
-            if predictions
-            else 1.0
-        )
+
+        # Get prediction values, filtering out None values
+        prediction_values = [
+            p.get("prediction_value", 0)
+            for p in predictions
+            if p.get("prediction_value") is not None and p.get("prediction_value") > 0
+        ]
+
+        # Calculate max_value safely
+        if prediction_values:
+            max_value = max(prediction_values)
+        else:
+            max_value = 1.0
+
+        # Ensure max_value is not zero or None
+        if max_value is None or max_value <= 0:
+            max_value = 1.0
 
         for pred in predictions:
             lat, lng = pred.get("lat"), pred.get("lng")
-            value = pred.get("prediction_value", 0)
+            value = pred.get("prediction_value")
 
-            if lat and lng:
-                intensity = value / max_value if max_value > 0 else 0
-                heat_data.append([lat, lng, intensity])
+            if lat and lng and value is not None and value > 0:
+                # Safe division with additional check
+                try:
+                    intensity = value / max_value if max_value > 0 else 0.5
+                    heat_data.append(
+                        [lat, lng, max(0.1, intensity)]
+                    )  # Ensure minimum intensity
+                except (TypeError, ZeroDivisionError):
+                    heat_data.append([lat, lng, 0.5])  # Default intensity
 
         if heat_data:
             HeatMap(

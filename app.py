@@ -11,6 +11,10 @@ import sys
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Add project root to path
 sys.path.append(str(Path(__file__).parent))

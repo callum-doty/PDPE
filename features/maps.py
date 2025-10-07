@@ -400,17 +400,8 @@ class MapService:
                     self._add_event_marker(event_layer, event, "default")
                 event_layer.add_to(m)
 
-            # Add prediction layer
-            if located_predictions:
-                if HEATMAP_AVAILABLE:
-                    pred_layer = folium.FeatureGroup(name="🤖 Predictions", show=False)
-                    self._add_prediction_heatmap_layer(pred_layer, located_predictions)
-                    pred_layer.add_to(m)
-                else:
-                    pred_layer = folium.FeatureGroup(name="🤖 Predictions", show=False)
-                    for pred in located_predictions:
-                        self._add_prediction_marker(pred_layer, pred, "calculated")
-                    pred_layer.add_to(m)
+            # Note: Predictions are now integrated into venue tooltips instead of separate layer
+            # This provides a cleaner user experience with predictions contextually relevant to venues
 
             # Add controls and comprehensive legend
             folium.LayerControl().add_to(m)
@@ -646,7 +637,7 @@ class MapService:
     def _add_venue_marker(
         self, layer: folium.FeatureGroup, venue: Dict, color_scheme: str
     ):
-        """Add venue marker to layer"""
+        """Add venue marker to layer with ML prediction in tooltip"""
         lat, lng = venue.get("lat"), venue.get("lng")
         if not lat or not lng:
             return
@@ -656,13 +647,46 @@ class MapService:
         score = rating / 5.0 if rating is not None else 0.6  # Normalize rating to 0-1
         radius, color, fill_color = self._get_marker_style(score, color_scheme)
 
+        # Get ML prediction for this venue
+        prediction_info = self._get_venue_prediction(venue.get("venue_id"))
+
+        # Build prediction section for popup
+        prediction_section = ""
+        tooltip_prediction = ""
+
+        if prediction_info:
+            prediction_value = prediction_info.get("prediction_value", 0)
+            confidence_score = prediction_info.get("confidence_score", 0)
+
+            # Color code the prediction
+            pred_color = (
+                "#d73027"
+                if prediction_value >= 0.7
+                else (
+                    "#fc8d59"
+                    if prediction_value >= 0.5
+                    else "#fee08b" if prediction_value >= 0.3 else "#91bfdb"
+                )
+            )
+
+            prediction_section = f"""
+            <div style="margin-top: 10px; padding: 8px; background-color: #fff3e0; border-radius: 5px; border-left: 4px solid {pred_color};">
+                <h5 style="margin: 0 0 5px 0; color: #333;">🤖 ML Prediction</h5>
+                <p style="margin: 3px 0;"><strong>Attendance Likelihood:</strong> <span style="color: {pred_color}; font-weight: bold;">{prediction_value:.1%}</span></p>
+                <p style="margin: 3px 0;"><strong>Confidence:</strong> {confidence_score:.1%}</p>
+                <p style="margin: 3px 0;"><strong>Model:</strong> {prediction_info.get('model_version', 'v1.0')}</p>
+            </div>
+            """
+            tooltip_prediction = f" | ML Prediction: {prediction_value:.1%}"
+
         popup_content = f"""
-        <div style="font-family: Arial, sans-serif; max-width: 280px;">
+        <div style="font-family: Arial, sans-serif; max-width: 300px;">
             <h4 style="margin: 0 0 10px 0; color: #333;">{venue.get('name', 'Unknown Venue')}</h4>
             <p style="margin: 5px 0;"><strong>Category:</strong> {venue.get('category', 'Unknown')}</p>
             <p style="margin: 5px 0;"><strong>Rating:</strong> {venue.get('avg_rating', 'N/A')}</p>
             <p style="margin: 5px 0;"><strong>Address:</strong> {venue.get('address', 'N/A')}</p>
             <p style="margin: 5px 0;"><strong>Provider:</strong> {venue.get('provider', 'Unknown')}</p>
+            {prediction_section}
             <div style="margin-top: 10px; padding: 5px; background-color: #f0f8ff; border-radius: 3px;">
                 <small>🏢 Venue Data</small>
             </div>
@@ -672,8 +696,8 @@ class MapService:
         folium.CircleMarker(
             location=(lat, lng),
             radius=radius,
-            popup=folium.Popup(popup_content, max_width=320),
-            tooltip=f"Venue: {venue.get('name', 'Unknown')} | Rating: {venue.get('avg_rating', 'N/A')}",
+            popup=folium.Popup(popup_content, max_width=350),
+            tooltip=f"Venue: {venue.get('name', 'Unknown')} | Rating: {venue.get('avg_rating', 'N/A')}{tooltip_prediction}",
             color=color,
             fill=True,
             fillColor=fill_color,
@@ -971,13 +995,35 @@ class MapService:
         <h5 style="margin: 10px 0 5px 0; color: #666;">🎭 Events ({event_count})</h5>
         <p style="margin: 3px 0;"><i class="fa fa-circle" style="color:#fee08b"></i> Event Locations</p>
         
-        <h5 style="margin: 10px 0 5px 0; color: #666;">🤖 Predictions ({prediction_count})</h5>
-        <div style="background: linear-gradient(to right, navy, red); height: 15px; width: 100px; margin: 5px 0;"></div>
-        <p style="margin: 3px 0;"><i class="fa fa-star" style="color:red"></i> High Value</p>
+        <h5 style="margin: 10px 0 5px 0; color: #666;">🤖 ML Predictions</h5>
+        <p style="margin: 3px 0;">📊 Integrated into venue tooltips</p>
+        <p style="margin: 3px 0;">🎯 Click venues to see predictions</p>
         
         </div>
         """
         map_obj.get_root().html.add_child(folium.Element(legend_html))
+
+    def _get_venue_prediction(self, venue_id: str) -> Optional[Dict]:
+        """Get ML prediction data for a specific venue"""
+        if not venue_id:
+            return None
+
+        try:
+            # Get predictions from database for this venue
+            predictions = self.db.get_predictions()
+            if not predictions:
+                return None
+
+            # Find prediction for this specific venue
+            for pred in predictions:
+                if pred.get("venue_id") == venue_id:
+                    return pred
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error getting venue prediction for {venue_id}: {e}")
+            return None
 
 
 # Global map service instance

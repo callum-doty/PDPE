@@ -875,18 +875,57 @@ class PredictionService:
         grid_predictions = []
 
         try:
+            # SAFETY CHECK: Validate bounds
+            if not bounds or not all(
+                key in bounds for key in ["min_lat", "max_lat", "min_lng", "max_lng"]
+            ):
+                self.logger.warning("Invalid bounds provided for grid predictions")
+                return []
+
+            # SAFETY CHECK: Ensure bounds are valid numbers
+            try:
+                min_lat, max_lat = float(bounds["min_lat"]), float(bounds["max_lat"])
+                min_lng, max_lng = float(bounds["min_lng"]), float(bounds["max_lng"])
+            except (ValueError, TypeError) as e:
+                self.logger.error(f"Invalid bound values: {e}")
+                return []
+
+            # SAFETY CHECK: Ensure bounds make sense
+            if min_lat >= max_lat or min_lng >= max_lng:
+                self.logger.error(
+                    "Invalid bounds: min values must be less than max values"
+                )
+                return []
+
+            # Filter venues to only those with valid coordinates
+            valid_venues = []
+            if existing_venues:
+                for venue in existing_venues:
+                    lat, lng = venue.get("lat"), venue.get("lng")
+                    if (
+                        lat is not None
+                        and lng is not None
+                        and isinstance(lat, (int, float))
+                        and isinstance(lng, (int, float))
+                    ):
+                        valid_venues.append(venue)
+
+            self.logger.debug(
+                f"Using {len(valid_venues)} venues with valid coordinates out of {len(existing_venues or [])} total venues"
+            )
+
             # Create a grid of points
-            lat_step = (bounds["max_lat"] - bounds["min_lat"]) / 20
-            lng_step = (bounds["max_lng"] - bounds["min_lng"]) / 20
+            lat_step = (max_lat - min_lat) / 20
+            lng_step = (max_lng - min_lng) / 20
 
             for i in range(20):
                 for j in range(20):
-                    lat = bounds["min_lat"] + i * lat_step
-                    lng = bounds["min_lng"] + j * lng_step
+                    lat = min_lat + i * lat_step
+                    lng = min_lng + j * lng_step
 
                     # Calculate prediction based on distance to existing venues
                     prediction_value = self._calculate_grid_prediction(
-                        lat, lng, existing_venues
+                        lat, lng, valid_venues
                     )
 
                     if prediction_value > 0.1:  # Only include meaningful predictions
@@ -901,6 +940,7 @@ class PredictionService:
                             )
                         )
 
+            self.logger.debug(f"Generated {len(grid_predictions)} grid predictions")
             return grid_predictions
 
         except Exception as e:
@@ -920,7 +960,15 @@ class PredictionService:
 
         for venue in venues:
             venue_lat, venue_lng = venue.get("lat"), venue.get("lng")
-            if not venue_lat or not venue_lng:
+
+            # CRITICAL FIX: Check for None values before using in calculations
+            if venue_lat is None or venue_lng is None:
+                continue
+
+            # Additional safety check for valid numeric values
+            if not isinstance(venue_lat, (int, float)) or not isinstance(
+                venue_lng, (int, float)
+            ):
                 continue
 
             # Simple distance calculation (not geodesic, but sufficient for small areas)

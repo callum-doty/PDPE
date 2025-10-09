@@ -31,6 +31,21 @@ except ImportError:
         "Playwright not available - dynamic venue scraping will use static fallback"
     )
 
+# Selenium imports for dynamic scraping
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
+    logging.warning(
+        "Selenium not available - dynamic venue scraping will use static fallback"
+    )
+
 # OpenAI imports for LLM extraction
 try:
     from openai import OpenAI
@@ -112,7 +127,7 @@ class VenueService:
             },
             "uptown_theater": {
                 "name": "Uptown Theater",
-                "url": "https://www.uptowntheater.com/events",
+                "url": "https://uptowntheater.com/calendar/",
                 "category": "major_venue",
                 "scrape_type": "static",
             },
@@ -161,13 +176,13 @@ class VenueService:
             },
             "jazz_district": {
                 "name": "18th & Vine Jazz District",
-                "url": "https://kcjazzdistrict.org/events/",
+                "url": "https://www.kcjazzdistrict.org/",
                 "category": "entertainment_district",
                 "scrape_type": "static",
             },
             "crossroads": {
                 "name": "Crossroads KC",
-                "url": "https://www.crossroadskc.com/shows",
+                "url": "https://kccrossroads.org/events/",
                 "category": "entertainment_district",
                 "scrape_type": "static",
             },
@@ -231,7 +246,7 @@ class VenueService:
             },
             "city_market": {
                 "name": "City Market KC",
-                "url": "https://citymarketkc.org/events/",
+                "url": "https://thecitymarketkc.org/events/",
                 "category": "festival_city",
                 "scrape_type": "static",
             },
@@ -257,7 +272,7 @@ class VenueService:
             },
             "do816": {
                 "name": "Do816",
-                "url": "https://do816.com/events",
+                "url": "https://do816.com/",
                 "category": "aggregator",
                 "scrape_type": "dynamic",
                 "wait_selector": ".event",

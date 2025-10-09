@@ -588,29 +588,55 @@ class EventService:
 
         return events
 
-    def _fetch_static_html(self, url: str) -> Optional[str]:
-        """Fetch HTML from static site with better error handling"""
+    def _get_random_user_agent(self) -> str:
+        """Get a random realistic user agent to avoid bot detection"""
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/120.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/120.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/120.0.0.0 Safari/537.36",
+        ]
+        import random
+
+        return random.choice(user_agents)
+
+    def _get_enhanced_headers(self, referer: str = None) -> Dict[str, str]:
+        """Get enhanced headers to avoid bot detection"""
+        headers = {
+            "User-Agent": self._get_random_user_agent(),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none" if not referer else "same-origin",
+            "Sec-Fetch-User": "?1",
+            "Cache-Control": "max-age=0",
+            "DNT": "1",
+            "Sec-GPC": "1",
+        }
+
+        if referer:
+            headers["Referer"] = referer
+
+        return headers
+
+    def _fetch_static_html(self, url: str, referer: str = None) -> Optional[str]:
+        """Fetch HTML from static site with enhanced bot avoidance"""
         try:
-            # Enhanced headers to avoid blocks
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Cache-Control": "max-age=0",
-            }
+            headers = self._get_enhanced_headers(referer)
 
             response = requests.get(
                 url,
                 headers=headers,
-                timeout=15,
+                timeout=20,  # Increased timeout
                 allow_redirects=True,
-                verify=True,  # Enable SSL verification
+                verify=True,
             )
             response.raise_for_status()
             return response.text
@@ -618,10 +644,12 @@ class EventService:
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 403:
                 self.logger.warning(
-                    f"⚠️  Access forbidden for {url} - site may require JavaScript or be blocking bots"
+                    f"⚠️  Access forbidden for {url} - site may be blocking bots (will retry with different UA)"
                 )
             elif e.response.status_code == 404:
                 self.logger.warning(f"⚠️  Page not found: {url} - URL may have changed")
+            elif e.response.status_code == 429:
+                self.logger.warning(f"⚠️  Rate limited for {url} - too many requests")
             else:
                 self.logger.error(f"HTTP error {e.response.status_code} for {url}: {e}")
             return None
@@ -641,25 +669,95 @@ class EventService:
     def _fetch_static_html_with_retry(
         self, url: str, max_retries: int = 3
     ) -> Optional[str]:
-        """Fetch HTML from static site with retry logic"""
+        """Fetch HTML from static site with enhanced retry logic and exponential backoff"""
+        import random
+
         for attempt in range(max_retries):
             try:
-                html = self._fetch_static_html(url)
-                if html:
+                # Try different referers on retries to appear more natural
+                referer = None
+                if attempt > 0:
+                    # Use the base domain as referer on retries
+                    from urllib.parse import urlparse
+
+                    parsed = urlparse(url)
+                    referer = f"{parsed.scheme}://{parsed.netloc}"
+
+                html = self._fetch_static_html(url, referer)
+                if html and len(html) >= 500:  # Ensure meaningful content
                     return html
 
                 if attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s, 6s
+                    # Exponential backoff with jitter to avoid thundering herd
+                    base_wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                    jitter = random.uniform(0.5, 1.5)  # Add randomness
+                    wait_time = base_wait * jitter
+
                     self.logger.debug(
-                        f"Retry {attempt + 1}/{max_retries} for {url} in {wait_time}s"
+                        f"Retry {attempt + 1}/{max_retries} for {url} in {wait_time:.1f}s"
                     )
                     time.sleep(wait_time)
 
-            except Exception as e:
-                self.logger.warning(f"Attempt {attempt + 1} failed for {url}: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep((attempt + 1) * 2)
+            except requests.exceptions.HTTPError as e:
+                # Don't retry certain HTTP errors
+                if e.response and e.response.status_code in [
+                    404,
+                    410,
+                    451,
+                ]:  # Not found, gone, unavailable for legal reasons
+                    self.logger.warning(
+                        f"Permanent error {e.response.status_code} for {url}, not retrying"
+                    )
+                    return None
+                elif e.response and e.response.status_code == 403:
+                    # For 403, try with different user agent on retry
+                    self.logger.warning(
+                        f"403 Forbidden for {url}, attempt {attempt + 1}/{max_retries}"
+                    )
+                    if attempt < max_retries - 1:
+                        wait_time = (2**attempt) + random.uniform(1, 3)
+                        time.sleep(wait_time)
+                    continue
+                elif e.response and e.response.status_code == 429:
+                    # Rate limited - wait longer
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** (attempt + 2)) + random.uniform(
+                            2, 5
+                        )  # 4s+, 8s+, 16s+
+                        self.logger.warning(
+                            f"Rate limited for {url}, waiting {wait_time:.1f}s"
+                        )
+                        time.sleep(wait_time)
+                    continue
+                else:
+                    self.logger.warning(
+                        f"HTTP error {e.response.status_code if e.response else 'unknown'} for {url}, attempt {attempt + 1}/{max_retries}"
+                    )
+                    if attempt < max_retries - 1:
+                        wait_time = (2**attempt) + random.uniform(0.5, 2)
+                        time.sleep(wait_time)
 
+            except (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+            ) as e:
+                # Network errors - retry with exponential backoff
+                self.logger.warning(
+                    f"Network error for {url}: {type(e).__name__}, attempt {attempt + 1}/{max_retries}"
+                )
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** (attempt + 1)) + random.uniform(1, 3)
+                    time.sleep(wait_time)
+
+            except Exception as e:
+                self.logger.warning(
+                    f"Unexpected error for {url}: {e}, attempt {attempt + 1}/{max_retries}"
+                )
+                if attempt < max_retries - 1:
+                    wait_time = (2**attempt) + random.uniform(0.5, 2)
+                    time.sleep(wait_time)
+
+        self.logger.error(f"Failed to fetch {url} after {max_retries} attempts")
         return None
 
     def _fetch_with_browser(
@@ -783,44 +881,109 @@ Content:
 
             result = response.choices[0].message.content.strip()
 
-            # Clean up common LLM formatting issues
-            result = result.replace("```json", "").replace("```", "").strip()
+            # ENHANCED JSON CLEANING: Handle all common LLM formatting issues
+            # Remove markdown code blocks
+            result = re.sub(r"```(?:json)?\s*", "", result)
+            result = re.sub(r"```\s*$", "", result)
 
-            # More aggressive JSON extraction
-            # Look for array boundaries
-            start_idx = result.find("[")
-            end_idx = result.rfind("]")
+            # Remove common prefixes/suffixes
+            result = re.sub(
+                r"^(?:Here\'s|Here is|The events are).*?(?:\n|:)",
+                "",
+                result,
+                flags=re.IGNORECASE,
+            )
+            result = re.sub(
+                r"(?:Hope this helps|Let me know).*$", "", result, flags=re.IGNORECASE
+            )
 
-            if start_idx == -1 or end_idx == -1:
-                self.logger.error(
-                    f"No JSON array found in LLM response for {venue_name}"
-                )
-                return []
+            # Strip whitespace and newlines
+            result = result.strip()
 
-            result = result[start_idx : end_idx + 1]
+            # More aggressive JSON extraction using regex
+            # Look for JSON array pattern
+            json_match = re.search(r"(\[.*?\])", result, re.DOTALL)
+            if json_match:
+                result = json_match.group(1)
+            else:
+                # Fallback to simple boundary detection
+                start_idx = result.find("[")
+                end_idx = result.rfind("]")
 
-            # Try to parse
+                if start_idx == -1 or end_idx == -1:
+                    self.logger.error(
+                        f"No JSON array found in LLM response for {venue_name}"
+                    )
+                    return []
+
+                result = result[start_idx : end_idx + 1]
+
+            # Try to parse with multiple repair strategies
+            events_data = None
+
+            # Strategy 1: Direct parsing
             try:
                 events_data = json.loads(result)
             except json.JSONDecodeError as e:
-                # Try to fix common JSON issues
-                self.logger.warning(
-                    f"JSON parse error for {venue_name}: {e}. Attempting repair..."
-                )
+                self.logger.debug(f"Direct JSON parse failed for {venue_name}: {e}")
 
-                # Fix unterminated strings by escaping quotes
-                result = result.replace('\\"', '"')  # Unescape first
-                result = re.sub(
-                    r'(?<!\\)"([^"]*?)(?<!\\)"',
-                    lambda m: '"' + m.group(1).replace('"', '\\"') + '"',
-                    result,
-                )
-
+                # Strategy 2: Fix common JSON issues
                 try:
-                    events_data = json.loads(result)
+                    # Fix trailing commas
+                    fixed_result = re.sub(r",(\s*[}\]])", r"\1", result)
+
+                    # Fix unescaped quotes in strings
+                    fixed_result = re.sub(
+                        r'(?<!\\)"([^"]*?)"(?=\s*:)', r'"\1"', fixed_result
+                    )
+
+                    # Fix single quotes to double quotes
+                    fixed_result = re.sub(r"'([^']*?)'(?=\s*:)", r'"\1"', fixed_result)
+                    fixed_result = re.sub(r":\s*'([^']*?)'", r': "\1"', fixed_result)
+
+                    events_data = json.loads(fixed_result)
+                    self.logger.debug(f"JSON repair successful for {venue_name}")
+
                 except json.JSONDecodeError as e2:
-                    self.logger.error(f"Failed to repair JSON for {venue_name}: {e2}")
-                    return []
+                    self.logger.debug(f"JSON repair failed for {venue_name}: {e2}")
+
+                    # Strategy 3: Extract individual objects using regex
+                    try:
+                        # Find all object-like patterns
+                        object_pattern = r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}"
+                        objects = re.findall(object_pattern, result)
+
+                        events_data = []
+                        for obj_str in objects:
+                            try:
+                                # Try to parse each object individually
+                                obj_str = re.sub(
+                                    r",(\s*})", r"\1", obj_str
+                                )  # Remove trailing commas
+                                obj = json.loads(obj_str)
+                                if obj.get("title"):  # Only include if it has a title
+                                    events_data.append(obj)
+                            except json.JSONDecodeError:
+                                continue
+
+                        if events_data:
+                            self.logger.debug(
+                                f"Individual object extraction successful for {venue_name}: {len(events_data)} objects"
+                            )
+                        else:
+                            raise json.JSONDecodeError(
+                                "No valid objects found", result, 0
+                            )
+
+                    except json.JSONDecodeError as e3:
+                        self.logger.error(
+                            f"All JSON parsing strategies failed for {venue_name}: {e3}"
+                        )
+                        return []
+
+            if events_data is None:
+                self.logger.error(f"Failed to parse JSON for {venue_name}")
+                return []
 
             # Handle both array and object responses
             if isinstance(events_data, dict):

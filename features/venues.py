@@ -1,12 +1,8 @@
 """
 Unified Venues Service for PPM Application
 
-Single service that consolidates ALL venue-related functionality:
-- Static venue scraping (29 KC venues)
-- Dynamic venue scraping (Selenium-based)
-- API venue collection (Google Places, Yelp, etc.)
-- Venue data processing and quality validation
-- Database operations
+Single service that consolidates ALL venue-related functionality using LLM-based scraping.
+All 29 KC venue sources scraped using OpenAI for robust extraction.
 
 Replaces the entire features/venues/ directory structure.
 """
@@ -21,24 +17,33 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
+import html2text
+import os
 
-# Selenium imports for dynamic scraping
+# Playwright imports for dynamic scraping
 try:
-    from selenium import webdriver
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.chrome.options import Options
-    from selenium.common.exceptions import TimeoutException, NoSuchElementException
+    from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
-    SELENIUM_AVAILABLE = True
+    PLAYWRIGHT_AVAILABLE = True
 except ImportError:
-    SELENIUM_AVAILABLE = False
-    logging.warning("Selenium not available - dynamic venue scraping will be disabled")
+    PLAYWRIGHT_AVAILABLE = False
+    logging.warning(
+        "Playwright not available - dynamic venue scraping will use static fallback"
+    )
+
+# OpenAI imports for LLM extraction
+try:
+    from openai import OpenAI
+
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    logging.error("OpenAI not available - LLM venue scraping will be disabled")
 
 # Import core services
 from core.database import get_database, OperationResult
 from core.quality import get_quality_validator
+from config.constants import KC_BOUNDING_BOX, KC_DOWNTOWN
 
 
 @dataclass
@@ -80,12 +85,208 @@ class VenueService:
         self.db = get_database()
         self.quality_validator = get_quality_validator()
 
+        # Initialize OpenAI client for LLM extraction
+        self.openai_client = self._initialize_openai_client()
+
         # Web scraping configuration
         self.scraping_headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
             "Connection": "keep-alive",
+        }
+
+        # HTML to markdown converter for LLM processing
+        self.html_converter = html2text.HTML2Text()
+        self.html_converter.ignore_links = False
+        self.html_converter.ignore_images = True
+
+        # All 29 KC Venue Sources (comprehensive list)
+        self.kc_venues = {
+            # Major Venues - Static HTML
+            "tmobile_center": {
+                "name": "T-Mobile Center",
+                "url": "https://www.t-mobilecenter.com/events",
+                "category": "major_venue",
+                "scrape_type": "static",
+            },
+            "uptown_theater": {
+                "name": "Uptown Theater",
+                "url": "https://www.uptowntheater.com/events",
+                "category": "major_venue",
+                "scrape_type": "static",
+            },
+            "kauffman_center": {
+                "name": "Kauffman Center for the Performing Arts",
+                "url": "https://www.kauffmancenter.org/events/",
+                "category": "major_venue",
+                "scrape_type": "static",
+            },
+            "starlight_theatre": {
+                "name": "Starlight Theatre",
+                "url": "https://www.kcstarlight.com/events/",
+                "category": "major_venue",
+                "scrape_type": "static",
+            },
+            "midland_theatre": {
+                "name": "The Midland Theatre",
+                "url": "https://www.midlandkc.com/events",
+                "category": "major_venue",
+                "scrape_type": "static",
+            },
+            "knuckleheads": {
+                "name": "Knuckleheads Saloon",
+                "url": "https://knuckleheadskc.com/",
+                "category": "major_venue",
+                "scrape_type": "static",
+            },
+            "azura_amphitheater": {
+                "name": "Azura Amphitheater",
+                "url": "https://www.azuraamphitheater.com/events",
+                "category": "major_venue",
+                "scrape_type": "static",
+            },
+            # Entertainment Districts - Static HTML
+            "powerandlight": {
+                "name": "Power & Light District",
+                "url": "https://powerandlightdistrict.com/Events-and-Entertainment/Events",
+                "category": "entertainment_district",
+                "scrape_type": "static",
+            },
+            "westport": {
+                "name": "Westport KC",
+                "url": "https://westportkcmo.com/events/",
+                "category": "entertainment_district",
+                "scrape_type": "static",
+            },
+            "jazz_district": {
+                "name": "18th & Vine Jazz District",
+                "url": "https://kcjazzdistrict.org/events/",
+                "category": "entertainment_district",
+                "scrape_type": "static",
+            },
+            "crossroads": {
+                "name": "Crossroads KC",
+                "url": "https://www.crossroadskc.com/shows",
+                "category": "entertainment_district",
+                "scrape_type": "static",
+            },
+            # Shopping & Cultural - Static HTML
+            "country_club_plaza": {
+                "name": "Country Club Plaza",
+                "url": "https://countryclubplaza.com/events/",
+                "category": "shopping_cultural",
+                "scrape_type": "static",
+            },
+            "crown_center": {
+                "name": "Crown Center",
+                "url": "https://www.crowncenter.com/events",
+                "category": "shopping_cultural",
+                "scrape_type": "static",
+            },
+            "union_station": {
+                "name": "Union Station Kansas City",
+                "url": "https://unionstation.org/events/",
+                "category": "shopping_cultural",
+                "scrape_type": "static",
+            },
+            # Museums - Static HTML
+            "nelson_atkins": {
+                "name": "Nelson-Atkins Museum of Art",
+                "url": "https://www.nelson-atkins.org/events/",
+                "category": "museum",
+                "scrape_type": "static",
+            },
+            "wwi_museum": {
+                "name": "National WWI Museum",
+                "url": "https://theworldwar.org/visit/upcoming-events",
+                "category": "museum",
+                "scrape_type": "static",
+            },
+            "science_city": {
+                "name": "Science City",
+                "url": "https://sciencecity.unionstation.org/",
+                "category": "museum",
+                "scrape_type": "static",
+            },
+            # Theater - Static HTML
+            "kc_rep": {
+                "name": "KC Repertory Theatre",
+                "url": "https://kcrep.org/season/",
+                "category": "theater",
+                "scrape_type": "static",
+            },
+            "unicorn_theatre": {
+                "name": "Unicorn Theatre",
+                "url": "https://unicorntheatre.org/",
+                "category": "theater",
+                "scrape_type": "static",
+            },
+            # Festival & City - Static HTML
+            "kc_parks": {
+                "name": "Kansas City Parks & Rec",
+                "url": "https://kcparks.org/events/",
+                "category": "festival_city",
+                "scrape_type": "static",
+            },
+            "city_market": {
+                "name": "City Market KC",
+                "url": "https://citymarketkc.org/events/",
+                "category": "festival_city",
+                "scrape_type": "static",
+            },
+            "boulevardia": {
+                "name": "Boulevardia Festival",
+                "url": "https://www.boulevardia.com/",
+                "category": "festival_city",
+                "scrape_type": "static",
+            },
+            "irish_fest": {
+                "name": "Irish Fest KC",
+                "url": "https://kcirishfest.com/",
+                "category": "festival_city",
+                "scrape_type": "static",
+            },
+            # Aggregators - Dynamic JS
+            "visitkc": {
+                "name": "Visit KC",
+                "url": "https://www.visitkc.com/events",
+                "category": "aggregator",
+                "scrape_type": "dynamic",
+                "wait_selector": ".event-card, .event-item",
+            },
+            "do816": {
+                "name": "Do816",
+                "url": "https://do816.com/events",
+                "category": "aggregator",
+                "scrape_type": "dynamic",
+                "wait_selector": ".event",
+            },
+            "pitch_kc": {
+                "name": "The Pitch KC",
+                "url": "https://calendar.thepitchkc.com/",
+                "category": "aggregator",
+                "scrape_type": "dynamic",
+            },
+            "kc_magazine": {
+                "name": "Kansas City Magazine Events",
+                "url": "https://events.kansascitymag.com/",
+                "category": "aggregator",
+                "scrape_type": "dynamic",
+            },
+            "eventkc": {
+                "name": "Event KC",
+                "url": "https://www.eventkc.com/",
+                "category": "aggregator",
+                "scrape_type": "dynamic",
+            },
+            # Nightlife - Dynamic JS
+            "aura_kc": {
+                "name": "Aura KC Nightclub",
+                "url": "https://www.aurakc.com/",
+                "category": "nightlife",
+                "scrape_type": "dynamic",
+            },
         }
 
         # Psychographic keywords for venue classification
@@ -128,43 +329,125 @@ class VenueService:
     # ========== PUBLIC API METHODS ==========
 
     def collect_from_google_places(
-        self, location: str = "Kansas City, MO", radius: int = 10000
+        self,
+        location: Optional[str] = None,
+        radius: int = 10000,
+        venue_types: Optional[List[str]] = None,
     ) -> OperationResult:
         """
-        Collect venues from Google Places API.
+        Collect venues from Google Places API with proper implementation.
 
         Args:
-            location: Location to search around
-            radius: Search radius in meters
+            location: Location to search around (defaults to KC Downtown)
+            radius: Search radius in meters (default: 10km)
+            venue_types: List of venue types to search for
 
         Returns:
             OperationResult with collection statistics
         """
         start_time = datetime.now()
-        self.logger.info(
-            f"🏢 Collecting venues from Google Places API around {location}"
-        )
+        self.logger.info(f"🏢 Collecting venues from Google Places API")
+
+        # Check for API key
+        api_key = os.getenv("GOOGLE_PLACES_API_KEY")
+        if not api_key:
+            self.logger.warning("Google Places API key not found in environment")
+            return OperationResult(
+                success=False,
+                error="API key not found",
+                message="GOOGLE_PLACES_API_KEY not set in environment variables",
+            )
 
         try:
-            # Note: This would require Google Places API key
-            # For now, return a mock result to maintain interface compatibility
-            venues_collected = 0
+            # Default to Kansas City downtown
+            if not location:
+                location = f"{KC_DOWNTOWN['lat']},{KC_DOWNTOWN['lng']}"
 
-            # TODO: Implement actual Google Places API integration
-            # venues = self._fetch_google_places_venues(location, radius)
-            # venues_collected = self._process_and_store_venues(venues, "google_places", "api")
+            # Default venue types based on psychographic interests
+            if not venue_types:
+                venue_types = [
+                    "restaurant",
+                    "bar",
+                    "night_club",
+                    "cafe",
+                    "museum",
+                    "art_gallery",
+                    "movie_theater",
+                    "shopping_mall",
+                    "gym",
+                    "spa",
+                    "book_store",
+                    "library",
+                    "park",
+                ]
+
+            all_venues = []
+
+            # Search for each venue type
+            for venue_type in venue_types:
+                try:
+                    venues = self._search_google_places(
+                        api_key, location, radius, venue_type
+                    )
+                    all_venues.extend(venues)
+
+                    self.logger.debug(
+                        f"Found {len(venues)} venues of type '{venue_type}'"
+                    )
+
+                    # Respectful API delay
+                    time.sleep(1)
+
+                except Exception as e:
+                    self.logger.error(f"Failed to search type {venue_type}: {e}")
+                    continue
+
+            # Remove duplicates based on place_id
+            unique_venues = {}
+            for venue in all_venues:
+                place_id = venue.get("place_id")
+                if place_id and place_id not in unique_venues:
+                    unique_venues[place_id] = venue
+
+            # Process and store venues
+            stored_count = 0
+            for venue_data in unique_venues.values():
+                try:
+                    processed_venue = self._process_google_places_venue(venue_data)
+                    if self._validate_and_store_venue(processed_venue):
+                        stored_count += 1
+                except Exception as e:
+                    self.logger.debug(f"Failed to process venue: {e}")
+                    continue
 
             duration = (datetime.now() - start_time).total_seconds()
 
+            # Update collection status
+            self.db.update_collection_status(
+                source_name="google_places",
+                success=True,
+                records_collected=stored_count,
+                duration_seconds=duration,
+            )
+
             return OperationResult(
                 success=True,
-                data=venues_collected,
-                message=f"Google Places API collection completed: {venues_collected} venues in {duration:.1f}s",
+                data=stored_count,
+                message=f"Google Places collection completed: {stored_count} venues in {duration:.1f}s",
             )
 
         except Exception as e:
             duration = (datetime.now() - start_time).total_seconds()
             self.logger.error(f"Google Places collection failed: {e}")
+
+            # Update collection status
+            self.db.update_collection_status(
+                source_name="google_places",
+                success=False,
+                error_message=str(e),
+                duration_seconds=duration,
+            )
+
             return OperationResult(
                 success=False,
                 error=str(e),
@@ -215,118 +498,153 @@ class VenueService:
 
     def collect_from_scraped_sources(self) -> OperationResult:
         """
-        Collect venues from web scraping (static + dynamic sources).
+        Collect venues from all 29 KC sources using LLM-based scraping.
 
         Returns:
             OperationResult with collection statistics
         """
         start_time = datetime.now()
-        self.logger.info("🌐 Collecting venues from scraped sources")
+        self.logger.info("🌐 Collecting venues from 29 KC sources using LLM scraping")
 
-        try:
-            total_venues = 0
-
-            # Collect from static sources (major KC venues)
-            static_result = self._collect_static_venues()
-            if static_result.success:
-                total_venues += static_result.data
-
-            # Collect from dynamic sources (if Selenium available)
-            if SELENIUM_AVAILABLE:
-                dynamic_result = self._collect_dynamic_venues()
-                if dynamic_result.success:
-                    total_venues += dynamic_result.data
-            else:
-                self.logger.warning(
-                    "Skipping dynamic venue collection - Selenium not available"
-                )
-
-            duration = (datetime.now() - start_time).total_seconds()
-
-            return OperationResult(
-                success=True,
-                data=total_venues,
-                message=f"Scraped sources collection completed: {total_venues} venues in {duration:.1f}s",
-            )
-
-        except Exception as e:
-            duration = (datetime.now() - start_time).total_seconds()
-            self.logger.error(f"Scraped sources collection failed: {e}")
+        if not self.openai_client:
             return OperationResult(
                 success=False,
-                error=str(e),
-                message=f"Scraped sources collection failed after {duration:.1f}s: {e}",
+                error="OpenAI not available",
+                message="LLM scraping requires OpenAI API key",
             )
+
+        total_venues = len(self.kc_venues)
+        venues_processed = 0
+        venues_failed = 0
+
+        self.logger.info(f"Processing {total_venues} venue sources...")
+
+        for idx, (venue_key, venue_config) in enumerate(self.kc_venues.items(), 1):
+            try:
+                self.logger.info(
+                    f"[{idx}/{total_venues}] Scraping {venue_config['name']}..."
+                )
+
+                # Fetch HTML content
+                if venue_config["scrape_type"] == "dynamic" and PLAYWRIGHT_AVAILABLE:
+                    html = self._fetch_with_browser(
+                        venue_config["url"], venue_config.get("wait_selector")
+                    )
+                else:
+                    html = self._fetch_static_html(venue_config["url"])
+
+                if not html:
+                    self.logger.warning(
+                        f"  ⚠️  Failed to fetch HTML for {venue_config['name']}"
+                    )
+                    venues_failed += 1
+                    continue
+
+                # Extract venue info using LLM
+                venue_info = self._extract_venue_with_llm(html, venue_config)
+
+                if venue_info:
+                    # Create VenueData object
+                    venue_data = VenueData(
+                        external_id=f"llm_{venue_key}",
+                        provider="llm_scraper",
+                        name=venue_info.get("name", venue_config["name"]),
+                        description=venue_info.get("description"),
+                        category=venue_config["category"],
+                        subcategory=venue_info.get("type"),
+                        website=venue_config["url"],
+                        address=venue_info.get("address"),
+                        phone=venue_info.get("phone"),
+                        lat=venue_info.get("lat"),
+                        lng=venue_info.get("lng"),
+                        avg_rating=None,
+                        psychographic_scores=self._calculate_venue_psychographics(
+                            venue_info.get("name", venue_config["name"]),
+                            venue_info.get("description", ""),
+                        ),
+                        scraped_at=datetime.now(),
+                        source_type="llm_scraper",
+                    )
+
+                    # Store venue
+                    if self._validate_and_store_venue(venue_data):
+                        venues_processed += 1
+                        self.logger.info(
+                            f"  ✅ Successfully scraped {venue_config['name']}"
+                        )
+                    else:
+                        venues_failed += 1
+                        self.logger.warning(
+                            f"  ⚠️  Failed to store {venue_config['name']}"
+                        )
+                else:
+                    venues_failed += 1
+                    self.logger.warning(
+                        f"  ⚠️  No venue info extracted for {venue_config['name']}"
+                    )
+
+                # Respectful delay
+                time.sleep(2)
+
+            except Exception as e:
+                venues_failed += 1
+                self.logger.error(f"  ❌ Error scraping {venue_key}: {e}")
+                continue
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        self.logger.info(
+            f"LLM venue scraping summary: {venues_processed} succeeded, {venues_failed} failed"
+        )
+
+        return OperationResult(
+            success=venues_processed > 0,
+            data=venues_processed,
+            message=f"LLM scraping completed: {venues_processed} venues from {total_venues} sources in {duration:.1f}s",
+        )
 
     def collect_all(self) -> OperationResult:
         """
-        Collect venues from ALL sources (APIs + scraping).
+        Collect venues from all sources (just LLM scraping now).
 
         Returns:
             OperationResult with comprehensive collection statistics
         """
-        start_time = datetime.now()
-        self.logger.info("🚀 Starting comprehensive venue collection from all sources")
-
-        results = []
-        total_venues = 0
-
-        # Collect from scraped sources first (most reliable)
-        scraped_result = self.collect_from_scraped_sources()
-        results.append(("Scraped Sources", scraped_result))
-        if scraped_result.success:
-            total_venues += scraped_result.data
-
-        # Collect from Google Places API
-        google_result = self.collect_from_google_places()
-        results.append(("Google Places", google_result))
-        if google_result.success:
-            total_venues += google_result.data
-
-        # Collect from Yelp API
-        yelp_result = self.collect_from_yelp()
-        results.append(("Yelp", yelp_result))
-        if yelp_result.success:
-            total_venues += yelp_result.data
-
-        # Calculate overall success
-        successful_sources = len([r for _, r in results if r.success])
-        duration = (datetime.now() - start_time).total_seconds()
-
-        # Log detailed results
-        self.logger.info("📊 Venue collection summary:")
-        for source_name, result in results:
-            status = "✅" if result.success else "❌"
-            self.logger.info(
-                f"  {status} {source_name}: {result.data if result.success else 0} venues"
-            )
-
-        return OperationResult(
-            success=successful_sources > 0,
-            data=total_venues,
-            message=f"Comprehensive collection completed: {total_venues} venues from {successful_sources}/{len(results)} sources in {duration:.1f}s",
-        )
+        return self.collect_from_scraped_sources()
 
     def get_venues(
         self, filters: Optional[Dict] = None, limit: Optional[int] = None
     ) -> List[Dict]:
         """
-        Get venues from database with optional filtering.
+        Get venues from database with enhanced filtering.
 
         Args:
-            filters: Optional filters (category, has_location, min_rating, etc.)
+            filters: Optional filters including:
+                - category: Venue category
+                - has_location: Only venues with lat/lng
+                - min_rating: Minimum average rating
+                - bounds: Geographic bounds dict
+                - provider: Data provider
+                - psychographic_min: Minimum psychographic score
             limit: Optional limit on number of results
 
         Returns:
             List of venue dictionaries
         """
         try:
-            # Add limit to filters if provided
             if filters is None:
                 filters = {}
+
+            # Add bounds filter if specified
+            if filters.get("bounds"):
+                bounds = filters["bounds"]
+                # Database will need to handle this - add to query
+
             if limit is not None:
                 filters["limit"] = limit
+
             return self.db.get_venues(filters)
+
         except Exception as e:
             self.logger.error(f"Failed to get venues: {e}")
             return []
@@ -361,7 +679,212 @@ class VenueService:
             self.logger.error(f"Failed to get venue {venue_id}: {e}")
             return None
 
+    def collect_venues_in_bounds(
+        self, bounds: Optional[Dict] = None, venue_types: Optional[List[str]] = None
+    ) -> OperationResult:
+        """
+        Collect venues within specific geographic bounds.
+
+        Args:
+            bounds: Geographic bounds dict with min_lat, max_lat, min_lng, max_lng
+            venue_types: Optional list of venue types to collect
+
+        Returns:
+            OperationResult with collection statistics
+        """
+        if not bounds:
+            bounds = {
+                "min_lat": KC_BOUNDING_BOX["south"],
+                "max_lat": KC_BOUNDING_BOX["north"],
+                "min_lng": KC_BOUNDING_BOX["west"],
+                "max_lng": KC_BOUNDING_BOX["east"],
+            }
+
+        self.logger.info(
+            f"🗺️ Collecting venues in bounds: "
+            f"lat {bounds['min_lat']:.4f} to {bounds['max_lat']:.4f}, "
+            f"lng {bounds['min_lng']:.4f} to {bounds['max_lng']:.4f}"
+        )
+
+        # Create a grid of search locations to cover the entire bounds
+        grid_locations = self._create_search_grid(bounds, grid_size_km=5)
+
+        self.logger.info(f"Created {len(grid_locations)} search grid points")
+
+        all_venues = []
+
+        for location in grid_locations:
+            try:
+                # Search this grid point
+                result = self.collect_from_google_places(
+                    location=f"{location['lat']},{location['lng']}",
+                    radius=5000,  # 5km radius
+                    venue_types=venue_types,
+                )
+
+                if result.success:
+                    all_venues.append(result.data)
+
+                # Respectful delay between searches
+                time.sleep(2)
+
+            except Exception as e:
+                self.logger.error(f"Failed to search grid point {location}: {e}")
+                continue
+
+        total_venues = sum(all_venues)
+
+        return OperationResult(
+            success=total_venues > 0,
+            data=total_venues,
+            message=f"Collected {total_venues} venues across {len(grid_locations)} search areas",
+        )
+
     # ========== PRIVATE IMPLEMENTATION METHODS ==========
+
+    def _initialize_openai_client(self):
+        """Initialize OpenAI client for LLM extraction"""
+        if not OPENAI_AVAILABLE:
+            return None
+
+        try:
+            import os
+
+            api_key = os.getenv("CHATGPT_API_KEY")
+            if not api_key:
+                self.logger.error("CHATGPT_API_KEY not found in environment variables")
+                return None
+            return OpenAI(api_key=api_key)
+        except Exception as e:
+            self.logger.error(f"Failed to initialize OpenAI client: {e}")
+            return None
+
+    def _fetch_static_html(self, url: str) -> Optional[str]:
+        """Fetch HTML from static site"""
+        try:
+            response = requests.get(url, headers=self.scraping_headers, timeout=15)
+            response.raise_for_status()
+            return response.text
+        except Exception as e:
+            self.logger.error(f"Failed to fetch {url}: {e}")
+            return None
+
+    def _fetch_with_browser(self, url: str, wait_selector: str = None) -> Optional[str]:
+        """Fetch HTML using Playwright for dynamic sites"""
+        if not PLAYWRIGHT_AVAILABLE:
+            # Fallback to static fetch
+            return self._fetch_static_html(url)
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                )
+                page = context.new_page()
+
+                self.logger.debug(f"Loading {url} with browser...")
+                page.goto(url, wait_until="networkidle", timeout=30000)
+
+                # Wait for specific content
+                if wait_selector:
+                    try:
+                        page.wait_for_selector(wait_selector, timeout=10000)
+                    except PlaywrightTimeout:
+                        self.logger.warning(f"Timeout waiting for {wait_selector}")
+
+                # Scroll to load lazy content
+                for _ in range(3):
+                    page.evaluate("window.scrollBy(0, 1000)")
+                    time.sleep(0.5)
+
+                html = page.content()
+                browser.close()
+                return html
+
+        except Exception as e:
+            self.logger.error(f"Browser fetch failed for {url}: {e}")
+            return None
+
+    def _extract_venue_with_llm(self, html: str, venue_config: Dict) -> Optional[Dict]:
+        """Extract venue information using LLM"""
+        if not self.openai_client:
+            return None
+
+        # Convert to markdown for cleaner processing
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
+
+        markdown = self.html_converter.handle(str(soup))
+
+        # Limit content size
+        if len(markdown) > 15000:
+            markdown = markdown[:15000] + "\n\n[Content truncated...]"
+
+        prompt = f"""Extract venue information from this {venue_config['name']} webpage.
+
+Return a JSON object with this EXACT structure:
+{{
+  "name": "Venue name",
+  "type": "Venue type/subcategory",
+  "address": "Full address",
+  "phone": "Phone number",
+  "description": "Brief description (max 200 chars)",
+  "lat": null,
+  "lng": null
+}}
+
+Rules:
+- Use null for missing fields
+- Extract only the main venue information, not events
+- Keep description brief and factual
+- Phone should be formatted like +1-816-555-0000
+- Address should be complete with city and zip
+- Return ONLY valid JSON object
+
+Content:
+{markdown}
+"""
+
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert at extracting structured venue data from webpages. Return only valid JSON.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0,
+                response_format={"type": "json_object"},
+            )
+            result = response.choices[0].message.content
+
+            # Parse response
+            venue_data = json.loads(result)
+
+            # Ensure we have at least a name
+            if not venue_data.get("name"):
+                venue_data["name"] = venue_config["name"]
+
+            return venue_data
+
+        except Exception as e:
+            self.logger.error(f"LLM extraction failed for {venue_config['name']}: {e}")
+            return None
+
+    def _calculate_venue_psychographics(self, name: str, description: str) -> Dict:
+        """Calculate psychographic scores for a venue"""
+        text = f"{name} {description}".lower() if description else name.lower()
+        scores = {}
+
+        for psychographic, keywords in self.psychographic_keywords.items():
+            score = sum(1 for keyword in keywords if keyword in text)
+            scores[psychographic] = min(score / len(keywords), 1.0)
+
+        return scores
 
     def _collect_static_venues(self) -> OperationResult:
         """Collect venues from static scraping sources (major KC venues)."""
@@ -799,6 +1322,188 @@ class VenueService:
         except Exception as e:
             self.logger.error(f"Error validating/storing venue {venue_data.name}: {e}")
             return False
+
+    def _search_google_places(
+        self, api_key: str, location: str, radius: int, venue_type: str
+    ) -> List[Dict]:
+        """
+        Search Google Places API for venues of a specific type.
+
+        Args:
+            api_key: Google Places API key
+            location: Center location (lat,lng format)
+            radius: Search radius in meters
+            venue_type: Type of venue to search for
+
+        Returns:
+            List of venue dictionaries from API
+        """
+        url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+
+        params = {
+            "location": location,
+            "radius": radius,
+            "type": venue_type,
+            "key": api_key,
+        }
+
+        all_results = []
+
+        # Make initial request
+        response = requests.get(url, params=params, timeout=15)
+        response.raise_for_status()
+
+        data = response.json()
+
+        if data.get("status") != "OK" and data.get("status") != "ZERO_RESULTS":
+            self.logger.warning(
+                f"Google Places API returned status: {data.get('status')}"
+            )
+            return []
+
+        results = data.get("results", [])
+        all_results.extend(results)
+
+        # Handle pagination (up to 2 additional pages)
+        next_page_token = data.get("next_page_token")
+        page_count = 1
+
+        while next_page_token and page_count < 3:
+            # Google requires a short delay before using next_page_token
+            time.sleep(2)
+
+            params["pagetoken"] = next_page_token
+            params.pop("location", None)
+            params.pop("radius", None)
+            params.pop("type", None)
+
+            response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
+
+            data = response.json()
+
+            if data.get("status") != "OK":
+                break
+
+            results = data.get("results", [])
+            all_results.extend(results)
+
+            next_page_token = data.get("next_page_token")
+            page_count += 1
+
+        return all_results
+
+    def _process_google_places_venue(self, api_venue: Dict) -> VenueData:
+        """
+        Convert Google Places API venue data to VenueData format.
+
+        Args:
+            api_venue: Venue data from Google Places API
+
+        Returns:
+            VenueData object
+        """
+        # Extract location
+        geometry = api_venue.get("geometry", {})
+        location = geometry.get("location", {})
+        lat = location.get("lat")
+        lng = location.get("lng")
+
+        # Extract types and map to category
+        types = api_venue.get("types", [])
+        category = self._map_google_types_to_category(types)
+
+        # Calculate psychographic scores based on venue type
+        psychographic_scores = self._calculate_venue_psychographics(
+            api_venue.get("name", ""), category
+        )
+
+        return VenueData(
+            external_id=api_venue.get("place_id", ""),
+            provider="google_places",
+            name=api_venue.get("name", "Unknown Venue"),
+            description=None,  # Would need Place Details API for this
+            category=category,
+            subcategory=types[0] if types else None,
+            website=None,  # Would need Place Details API
+            address=api_venue.get("vicinity", ""),
+            phone=None,  # Would need Place Details API
+            lat=lat,
+            lng=lng,
+            avg_rating=api_venue.get("rating"),
+            psychographic_scores=psychographic_scores,
+            scraped_at=datetime.now(),
+            source_type="api",
+        )
+
+    def _map_google_types_to_category(self, types: List[str]) -> str:
+        """
+        Map Google Places types to PPM venue categories.
+
+        Args:
+            types: List of Google Places types
+
+        Returns:
+            PPM category string
+        """
+        # Priority mapping - first match wins
+        type_mapping = {
+            "restaurant": "restaurant",
+            "bar": "bar",
+            "night_club": "nightclub",
+            "cafe": "restaurant",
+            "museum": "museum",
+            "art_gallery": "gallery",
+            "movie_theater": "theater",
+            "shopping_mall": "shopping",
+            "gym": "recreation",
+            "spa": "recreation",
+            "book_store": "cultural",
+            "library": "cultural",
+            "park": "recreation",
+            "stadium": "sports_venue",
+            "bowling_alley": "recreation",
+            "casino": "entertainment",
+            "amusement_park": "entertainment",
+        }
+
+        for venue_type in types:
+            if venue_type in type_mapping:
+                return type_mapping[venue_type]
+
+        # Default category
+        return "local_venue"
+
+    def _create_search_grid(self, bounds: Dict, grid_size_km: float = 5) -> List[Dict]:
+        """
+        Create a grid of search locations to cover geographic bounds.
+
+        Args:
+            bounds: Geographic bounds dictionary
+            grid_size_km: Size of each grid cell in kilometers
+
+        Returns:
+            List of location dictionaries with lat/lng
+        """
+        # Approximate km per degree (varies by latitude)
+        # At KC latitude (~39°), 1° lat ≈ 111km, 1° lng ≈ 85km
+        km_per_degree_lat = 111
+        km_per_degree_lng = 85
+
+        lat_step = grid_size_km / km_per_degree_lat
+        lng_step = grid_size_km / km_per_degree_lng
+
+        grid_locations = []
+
+        current_lat = bounds["min_lat"]
+        while current_lat <= bounds["max_lat"]:
+            current_lng = bounds["min_lng"]
+            while current_lng <= bounds["max_lng"]:
+                grid_locations.append({"lat": current_lat, "lng": current_lng})
+                current_lng += lng_step
+            current_lat += lat_step
+
+        return grid_locations
 
 
 # Global venue service instance
